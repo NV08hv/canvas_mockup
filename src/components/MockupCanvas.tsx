@@ -17,6 +17,21 @@ interface DesignState {
   order: number // 0 = back, 1 = front
 }
 
+interface TextLayer {
+  id: string
+  text: string
+  x: number
+  y: number
+  fontSize: number
+  fontFamily: string
+  color: string
+  bold: boolean
+  italic: boolean
+  align: 'left' | 'center' | 'right'
+  visible: boolean
+  order: number
+}
+
 const BLEND_MODES: GlobalCompositeOperation[] = [
   'source-over',
   'multiply',
@@ -72,6 +87,11 @@ function MockupCanvas() {
 
   // Canvas refresh counter to force re-render of preview tiles
   const [canvasRefreshKey, setCanvasRefreshKey] = useState(0)
+
+  // Text layers state
+  const [textLayers, setTextLayers] = useState<TextLayer[]>([])
+  const [selectedTextLayerId, setSelectedTextLayerId] = useState<string | null>(null)
+  const [mockupTextOverrides, setMockupTextOverrides] = useState<Map<number, Map<string, Partial<TextLayer>>>>(new Map())
 
   // Drag state
   const [isDragging, setIsDragging] = useState(false)
@@ -234,6 +254,98 @@ function MockupCanvas() {
     ctx.restore()
   }
 
+  // Get effective text layer properties for a specific mockup
+  const getEffectiveTextLayer = (textLayer: TextLayer, mockupIndex: number): TextLayer => {
+    const overrides = mockupTextOverrides.get(mockupIndex)?.get(textLayer.id)
+    if (overrides) {
+      return { ...textLayer, ...overrides }
+    }
+    return textLayer
+  }
+
+  // Helper function to draw text layer
+  const drawTextLayer = (
+    ctx: CanvasRenderingContext2D,
+    textLayer: TextLayer,
+    mockupIndex: number
+  ) => {
+    const effectiveText = getEffectiveTextLayer(textLayer, mockupIndex)
+    if (!effectiveText.visible || !effectiveText.text) return
+
+    ctx.save()
+
+    // Set font properties
+    const fontStyle = `${effectiveText.italic ? 'italic' : 'normal'} ${effectiveText.bold ? 'bold' : 'normal'} ${effectiveText.fontSize}px ${effectiveText.fontFamily}`
+    ctx.font = fontStyle
+    ctx.fillStyle = effectiveText.color
+    ctx.textAlign = effectiveText.align
+    ctx.textBaseline = 'middle'
+
+    // Draw text
+    ctx.fillText(effectiveText.text, effectiveText.x, effectiveText.y)
+
+    ctx.restore()
+  }
+
+  // Add new text layer
+  const addTextLayer = () => {
+    const newLayer: TextLayer = {
+      id: `text-${Date.now()}`,
+      text: 'New Text',
+      x: mockupImage ? mockupImage.width / 2 : 400,
+      y: mockupImage ? mockupImage.height / 2 : 400,
+      fontSize: 48,
+      fontFamily: 'Arial',
+      color: '#000000',
+      bold: false,
+      italic: false,
+      align: 'center',
+      visible: true,
+      order: textLayers.length
+    }
+    setTextLayers(prev => [...prev, newLayer])
+    setSelectedTextLayerId(newLayer.id)
+    setCanvasRefreshKey(prev => prev + 1)
+  }
+
+  // Delete text layer
+  const deleteTextLayer = (id: string) => {
+    setTextLayers(prev => prev.filter(layer => layer.id !== id))
+    if (selectedTextLayerId === id) {
+      setSelectedTextLayerId(null)
+    }
+    setCanvasRefreshKey(prev => prev + 1)
+  }
+
+  // Update text layer
+  const updateTextLayer = (id: string, updates: Partial<TextLayer>) => {
+    if (editMode.active && editMode.mockupIndex !== null) {
+      // Update per-mockup override
+      setMockupTextOverrides(prev => {
+        const newMap = new Map(prev)
+        const mockupOverrides = newMap.get(editMode.mockupIndex!) || new Map()
+        const currentOverrides = mockupOverrides.get(id) || {}
+        mockupOverrides.set(id, { ...currentOverrides, ...updates })
+        newMap.set(editMode.mockupIndex!, mockupOverrides)
+        return newMap
+      })
+    } else {
+      // Update global text layer
+      setTextLayers(prev => prev.map(layer =>
+        layer.id === id ? { ...layer, ...updates } : layer
+      ))
+    }
+    setCanvasRefreshKey(prev => prev + 1)
+  }
+
+  // Toggle text layer visibility
+  const toggleTextLayerVisibility = (id: string) => {
+    const layer = textLayers.find(l => l.id === id)
+    if (layer) {
+      updateTextLayer(id, { visible: !layer.visible })
+    }
+  }
+
   // Render canvas
   useEffect(() => {
     const canvas = canvasRef.current
@@ -259,7 +371,11 @@ function MockupCanvas() {
     ].sort((a, b) => a.design.order - b.design.order)
 
     designs.forEach(({ design, num }) => drawDesign(ctx, design, num, selectedMockupIndex))
-  }, [mockupImage, design1, design2, selectedMockupIndex, mockupOffsets, mockupCustomTransforms1, mockupCustomTransforms2, mockupCustomBlendModes1, mockupCustomBlendModes2])
+
+    // Draw text layers in order
+    const sortedTextLayers = [...textLayers].sort((a, b) => a.order - b.order)
+    sortedTextLayers.forEach(textLayer => drawTextLayer(ctx, textLayer, selectedMockupIndex))
+  }, [mockupImage, design1, design2, selectedMockupIndex, mockupOffsets, mockupCustomTransforms1, mockupCustomTransforms2, mockupCustomBlendModes1, mockupCustomBlendModes2, textLayers, mockupTextOverrides])
 
   // Get effective position for a design on a specific mockup
   const getEffectivePosition = (designNum: 1 | 2, mockupIndex: number): { x: number; y: number } => {
@@ -569,6 +685,10 @@ function MockupCanvas() {
 
         designs.forEach(({ design, num }) => drawDesign(ctx, design, num, index))
 
+        // Draw text layers in order
+        const sortedTextLayers = [...textLayers].sort((a, b) => a.order - b.order)
+        sortedTextLayers.forEach(textLayer => drawTextLayer(ctx, textLayer, index))
+
         // Convert to blob and add to zip
         tempCanvas.toBlob((blob) => {
           if (blob && folder) {
@@ -671,6 +791,27 @@ function MockupCanvas() {
                     -design.image.width / 2,
                     -design.image.height / 2
                   )
+                  ctx.restore()
+                })
+
+                // Draw text layers in order (scaled to preview)
+                const sortedTextLayers = [...textLayers].sort((a, b) => a.order - b.order)
+                sortedTextLayers.forEach(textLayer => {
+                  const effectiveText = getEffectiveTextLayer(textLayer, index)
+                  if (!effectiveText.visible || !effectiveText.text) return
+
+                  ctx.save()
+
+                  // Set font properties (scaled to preview)
+                  const fontStyle = `${effectiveText.italic ? 'italic' : 'normal'} ${effectiveText.bold ? 'bold' : 'normal'} ${effectiveText.fontSize * scaleX}px ${effectiveText.fontFamily}`
+                  ctx.font = fontStyle
+                  ctx.fillStyle = effectiveText.color
+                  ctx.textAlign = effectiveText.align
+                  ctx.textBaseline = 'middle'
+
+                  // Draw text (scaled to preview)
+                  ctx.fillText(effectiveText.text, effectiveText.x * scaleX, effectiveText.y * scaleY)
+
                   ctx.restore()
                 })
 
@@ -1112,6 +1253,175 @@ function MockupCanvas() {
               <p className="text-xs text-gray-400 mt-2">
                 Current: <span className="text-blue-400">{getActiveEffectiveBlendMode()}</span>
               </p>
+            </div>
+
+            {/* Text Layers */}
+            <div>
+              <h2 className="text-xl font-semibold mb-4">Text Layers</h2>
+
+              <button
+                onClick={addTextLayer}
+                className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded transition mb-4"
+              >
+                + Add Text Layer
+              </button>
+
+              {textLayers.length > 0 && (
+                <div className="space-y-3">
+                  {textLayers.map((layer) => {
+                    const isSelected = selectedTextLayerId === layer.id
+                    const effectiveLayer = editMode.active && editMode.mockupIndex !== null
+                      ? getEffectiveTextLayer(layer, editMode.mockupIndex)
+                      : layer
+
+                    return (
+                      <div
+                        key={layer.id}
+                        className={`bg-gray-700 rounded-lg p-3 ${isSelected ? 'ring-2 ring-blue-500' : ''}`}
+                      >
+                        <div className="flex justify-between items-center mb-2">
+                          <button
+                            onClick={() => setSelectedTextLayerId(isSelected ? null : layer.id)}
+                            className="text-sm font-semibold text-white hover:text-blue-400 flex-1 text-left"
+                          >
+                            {layer.text.substring(0, 20) || 'Empty Text'}
+                          </button>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => toggleTextLayerVisibility(layer.id)}
+                              className="text-xs px-2 py-1 rounded bg-gray-600 hover:bg-gray-500"
+                            >
+                              {effectiveLayer.visible ? '👁️' : '👁️‍🗨️'}
+                            </button>
+                            <button
+                              onClick={() => deleteTextLayer(layer.id)}
+                              className="text-xs px-2 py-1 rounded bg-red-600 hover:bg-red-700"
+                            >
+                              🗑️
+                            </button>
+                          </div>
+                        </div>
+
+                        {isSelected && (
+                          <div className="space-y-2 mt-3 pt-3 border-t border-gray-600">
+                            <div>
+                              <label className="block text-xs font-medium mb-1">Text</label>
+                              <input
+                                type="text"
+                                value={effectiveLayer.text}
+                                onChange={(e) => updateTextLayer(layer.id, { text: e.target.value })}
+                                className="w-full bg-gray-600 border border-gray-500 rounded px-2 py-1 text-sm"
+                              />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="block text-xs font-medium mb-1">Font Size: {effectiveLayer.fontSize}px</label>
+                                <input
+                                  type="range"
+                                  min="12"
+                                  max="200"
+                                  value={effectiveLayer.fontSize}
+                                  onChange={(e) => updateTextLayer(layer.id, { fontSize: parseInt(e.target.value) })}
+                                  className="w-full"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="block text-xs font-medium mb-1">Color</label>
+                                <input
+                                  type="color"
+                                  value={effectiveLayer.color}
+                                  onChange={(e) => updateTextLayer(layer.id, { color: e.target.value })}
+                                  className="w-full h-8 rounded cursor-pointer"
+                                />
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="block text-xs font-medium mb-1">Font Family</label>
+                              <select
+                                value={effectiveLayer.fontFamily}
+                                onChange={(e) => updateTextLayer(layer.id, { fontFamily: e.target.value })}
+                                className="w-full bg-gray-600 border border-gray-500 rounded px-2 py-1 text-sm"
+                              >
+                                <option value="Arial">Arial</option>
+                                <option value="Helvetica">Helvetica</option>
+                                <option value="Times New Roman">Times New Roman</option>
+                                <option value="Georgia">Georgia</option>
+                                <option value="Courier New">Courier New</option>
+                                <option value="Verdana">Verdana</option>
+                                <option value="Impact">Impact</option>
+                              </select>
+                            </div>
+
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => updateTextLayer(layer.id, { bold: !effectiveLayer.bold })}
+                                className={`flex-1 text-xs py-1 rounded transition ${
+                                  effectiveLayer.bold ? 'bg-blue-600 text-white' : 'bg-gray-600 hover:bg-gray-500'
+                                }`}
+                              >
+                                <strong>B</strong>
+                              </button>
+                              <button
+                                onClick={() => updateTextLayer(layer.id, { italic: !effectiveLayer.italic })}
+                                className={`flex-1 text-xs py-1 rounded transition ${
+                                  effectiveLayer.italic ? 'bg-blue-600 text-white' : 'bg-gray-600 hover:bg-gray-500'
+                                }`}
+                              >
+                                <em>I</em>
+                              </button>
+                            </div>
+
+                            <div>
+                              <label className="block text-xs font-medium mb-1">Alignment</label>
+                              <div className="grid grid-cols-3 gap-2">
+                                {(['left', 'center', 'right'] as const).map((align) => (
+                                  <button
+                                    key={align}
+                                    onClick={() => updateTextLayer(layer.id, { align })}
+                                    className={`text-xs py-1 rounded transition ${
+                                      effectiveLayer.align === align ? 'bg-blue-600 text-white' : 'bg-gray-600 hover:bg-gray-500'
+                                    }`}
+                                  >
+                                    {align.charAt(0).toUpperCase() + align.slice(1)}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="block text-xs font-medium mb-1">X: {effectiveLayer.x.toFixed(0)}</label>
+                                <input
+                                  type="range"
+                                  min="0"
+                                  max={mockupImage?.width || 1000}
+                                  value={effectiveLayer.x}
+                                  onChange={(e) => updateTextLayer(layer.id, { x: parseFloat(e.target.value) })}
+                                  className="w-full"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-xs font-medium mb-1">Y: {effectiveLayer.y.toFixed(0)}</label>
+                                <input
+                                  type="range"
+                                  min="0"
+                                  max={mockupImage?.height || 1000}
+                                  value={effectiveLayer.y}
+                                  onChange={(e) => updateTextLayer(layer.id, { y: parseFloat(e.target.value) })}
+                                  className="w-full"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
 
             {/* Export */}
