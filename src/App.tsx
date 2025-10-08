@@ -1,4 +1,3 @@
-import { useState, useRef, useEffect } from 'react'
 import MockupCanvas from './components/MockupCanvas'
 
 function App() {
