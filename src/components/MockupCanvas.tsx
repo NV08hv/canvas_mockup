@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import JSZip from 'jszip'
 
 interface Transform {
   x: number
@@ -25,12 +26,14 @@ type BlendMode = typeof BLEND_MODES[number]
 
 function MockupCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [mockupImages, setMockupImages] = useState<HTMLImageElement[]>([])
+  const [selectedMockupIndex, setSelectedMockupIndex] = useState<number>(0)
   const [mockupImage, setMockupImage] = useState<HTMLImageElement | null>(null)
   const [designImage, setDesignImage] = useState<HTMLImageElement | null>(null)
   const [transform, setTransform] = useState<Transform>({
     x: 0,
     y: 0,
-    scale: 1,
+    scale: 0.10,
     rotation: 0,
     opacity: 100,
   })
@@ -38,19 +41,36 @@ function MockupCanvas() {
   const [isDragging, setIsDragging] = useState(false)
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
 
-  // Load mockup image
+  // Load mockup images from folder
   const handleMockupUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) {
-      const reader = new FileReader()
-      reader.onload = (event) => {
-        const img = new Image()
-        img.onload = () => setMockupImage(img)
-        img.src = event.target?.result as string
-      }
-      reader.readAsDataURL(file)
+    const files = e.target.files
+    if (files && files.length > 0) {
+      const imagePromises = Array.from(files).map(file => {
+        return new Promise<HTMLImageElement>((resolve) => {
+          const reader = new FileReader()
+          reader.onload = (event) => {
+            const img = new Image()
+            img.onload = () => resolve(img)
+            img.src = event.target?.result as string
+          }
+          reader.readAsDataURL(file)
+        })
+      })
+
+      Promise.all(imagePromises).then(images => {
+        setMockupImages(images)
+        setSelectedMockupIndex(0)
+        setMockupImage(images[0])
+      })
     }
   }
+
+  // Update mockup when selection changes
+  useEffect(() => {
+    if (mockupImages.length > 0) {
+      setMockupImage(mockupImages[selectedMockupIndex])
+    }
+  }, [selectedMockupIndex, mockupImages])
 
   // Load design image
   const handleDesignUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -143,42 +163,153 @@ function MockupCanvas() {
     setIsDragging(false)
   }
 
-  // Export PNG
-  const handleExport = () => {
-    const canvas = canvasRef.current
-    if (!canvas) return
+  // Export all mockups as ZIP
+  const handleExport = async () => {
+    if (mockupImages.length === 0) return
 
-    canvas.toBlob((blob) => {
-      if (blob) {
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = 'mockup_final.png'
-        a.click()
-        URL.revokeObjectURL(url)
-      }
-    }, 'image/png')
+    const zip = new JSZip()
+    const folder = zip.folder('mockups')
+
+    // Create promises for all canvas conversions
+    const promises = mockupImages.map((mockupImg, index) => {
+      return new Promise<void>((resolve) => {
+        const tempCanvas = document.createElement('canvas')
+        const ctx = tempCanvas.getContext('2d')
+        if (!ctx) {
+          resolve()
+          return
+        }
+
+        tempCanvas.width = mockupImg.width
+        tempCanvas.height = mockupImg.height
+
+        // Draw mockup
+        ctx.clearRect(0, 0, tempCanvas.width, tempCanvas.height)
+        ctx.drawImage(mockupImg, 0, 0)
+
+        // Draw design if available
+        if (designImage) {
+          ctx.save()
+          ctx.globalCompositeOperation = blendMode
+          ctx.globalAlpha = transform.opacity / 100
+          ctx.translate(transform.x, transform.y)
+          ctx.rotate((transform.rotation * Math.PI) / 180)
+          ctx.scale(transform.scale, transform.scale)
+          ctx.drawImage(
+            designImage,
+            -designImage.width / 2,
+            -designImage.height / 2
+          )
+          ctx.restore()
+        }
+
+        // Convert to blob and add to zip
+        tempCanvas.toBlob((blob) => {
+          if (blob && folder) {
+            folder.file(`mockup_${index + 1}.png`, blob)
+          }
+          resolve()
+        }, 'image/png')
+      })
+    })
+
+    // Wait for all images to be processed
+    await Promise.all(promises)
+
+    // Generate and download zip
+    zip.generateAsync({ type: 'blob' }).then((content) => {
+      const url = URL.createObjectURL(content)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'mockups.zip'
+      a.click()
+      URL.revokeObjectURL(url)
+    })
+  }
+
+  // Render all mockups with design
+  const renderMockupWithDesign = (mockupImg: HTMLImageElement) => {
+    const tempCanvas = document.createElement('canvas')
+    const ctx = tempCanvas.getContext('2d')
+    if (!ctx) return ''
+
+    tempCanvas.width = mockupImg.width
+    tempCanvas.height = mockupImg.height
+
+    ctx.clearRect(0, 0, tempCanvas.width, tempCanvas.height)
+    ctx.drawImage(mockupImg, 0, 0)
+
+    if (designImage) {
+      ctx.save()
+      ctx.globalCompositeOperation = blendMode
+      ctx.globalAlpha = transform.opacity / 100
+      ctx.translate(transform.x, transform.y)
+      ctx.rotate((transform.rotation * Math.PI) / 180)
+      ctx.scale(transform.scale, transform.scale)
+      ctx.drawImage(
+        designImage,
+        -designImage.width / 2,
+        -designImage.height / 2
+      )
+      ctx.restore()
+    }
+
+    return tempCanvas.toDataURL('image/png')
   }
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       {/* Canvas Area */}
       <div className="lg:col-span-2 bg-gray-800 rounded-lg p-6">
-        <div className="bg-gray-700 rounded overflow-auto">
-          <canvas
-            ref={canvasRef}
-            className="max-w-full h-auto cursor-move"
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
-          />
-        </div>
-        {!mockupImage && (
-          <div className="text-center text-gray-400 mt-4">
-            Upload a mockup to get started
+        {mockupImages.length === 0 ? (
+          <div className="text-center text-gray-400 py-20">
+            Upload mockup files to get started
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-4">
+            {mockupImages.map((mockupImg, index) => {
+              const tempCanvas = document.createElement('canvas')
+              const ctx = tempCanvas.getContext('2d')
+              if (!ctx) return null
+
+              tempCanvas.width = mockupImg.width
+              tempCanvas.height = mockupImg.height
+              ctx.clearRect(0, 0, tempCanvas.width, tempCanvas.height)
+              ctx.drawImage(mockupImg, 0, 0)
+
+              if (designImage) {
+                ctx.save()
+                ctx.globalCompositeOperation = blendMode
+                ctx.globalAlpha = transform.opacity / 100
+                ctx.translate(transform.x, transform.y)
+                ctx.rotate((transform.rotation * Math.PI) / 180)
+                ctx.scale(transform.scale, transform.scale)
+                ctx.drawImage(
+                  designImage,
+                  -designImage.width / 2,
+                  -designImage.height / 2
+                )
+                ctx.restore()
+              }
+
+              return (
+                <div key={index} className="bg-gray-700 rounded p-2">
+                  <img
+                    src={tempCanvas.toDataURL('image/png')}
+                    alt={`Mockup ${index + 1}`}
+                    className="w-full h-auto rounded"
+                  />
+                  <p className="text-center text-sm text-gray-400 mt-2">
+                    Mockup {index + 1}
+                  </p>
+                </div>
+              )
+            })}
           </div>
         )}
+
+        {/* Hidden canvas for export */}
+        <canvas ref={canvasRef} className="hidden" />
       </div>
 
       {/* Controls Panel */}
@@ -190,11 +321,15 @@ function MockupCanvas() {
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium mb-2">
-                Mockup (T-shirt base)
+                Mockup Folder
               </label>
               <input
                 type="file"
                 accept="image/*"
+                multiple
+                // @ts-ignore - webkitdirectory is not in React types but works in browsers
+                webkitdirectory="true"
+                directory="true"
                 onChange={handleMockupUpload}
                 className="block w-full text-sm text-gray-400
                   file:mr-4 file:py-2 file:px-4
@@ -203,6 +338,11 @@ function MockupCanvas() {
                   file:bg-blue-600 file:text-white
                   hover:file:bg-blue-700 file:cursor-pointer"
               />
+              {mockupImages.length > 0 && (
+                <p className="text-xs text-gray-400 mt-1">
+                  {mockupImages.length} mockup(s) loaded - all displayed in grid
+                </p>
+              )}
             </div>
 
             <div>
@@ -219,19 +359,49 @@ function MockupCanvas() {
                   file:text-sm file:font-semibold
                   file:bg-green-600 file:text-white
                   hover:file:bg-green-700 file:cursor-pointer"
-                disabled={!mockupImage}
+                disabled={mockupImages.length === 0}
               />
             </div>
           </div>
         </div>
 
         {/* Transform Controls */}
-        {designImage && (
+        {designImage && mockupImages.length > 0 && (
           <>
             <div>
               <h2 className="text-xl font-semibold mb-4">Transform</h2>
 
               <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-2">
+                    Horizontal (X): {transform.x.toFixed(0)}px
+                  </label>
+                  <input
+                    type="range"
+                    min="0"
+                    max={mockupImage?.width || 1000}
+                    step="1"
+                    value={transform.x}
+                    onChange={(e) => setTransform(prev => ({ ...prev, x: parseFloat(e.target.value) }))}
+                    className="w-full"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-2">
+                    Vertical (Y): {transform.y.toFixed(0)}px
+                  </label>
+                  <input
+                    type="range"
+                    min="0"
+                    max={mockupImage?.height || 1000}
+                    step="1"
+                    value={transform.y}
+                    onChange={(e) => setTransform(prev => ({ ...prev, y: parseFloat(e.target.value) }))}
+                    className="w-full"
+                  />
+                </div>
+
                 <div>
                   <label className="block text-sm font-medium mb-2">
                     Scale: {transform.scale.toFixed(2)}x
@@ -299,7 +469,7 @@ function MockupCanvas() {
                 onClick={handleExport}
                 className="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-6 rounded transition"
               >
-                Export PNG
+                Export as ZIP ({mockupImages.length} files)
               </button>
             </div>
           </>
