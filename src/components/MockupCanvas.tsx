@@ -28,6 +28,7 @@ interface TextLayer {
   bold: boolean
   italic: boolean
   align: 'left' | 'center' | 'right'
+  rotation: number
   visible: boolean
   order: number
 }
@@ -281,8 +282,12 @@ function MockupCanvas() {
     ctx.textAlign = effectiveText.align
     ctx.textBaseline = 'middle'
 
-    // Draw text
-    ctx.fillText(effectiveText.text, effectiveText.x, effectiveText.y)
+    // Apply rotation
+    ctx.translate(effectiveText.x, effectiveText.y)
+    ctx.rotate((effectiveText.rotation * Math.PI) / 180)
+
+    // Draw text at origin (already translated)
+    ctx.fillText(effectiveText.text, 0, 0)
 
     ctx.restore()
   }
@@ -300,6 +305,7 @@ function MockupCanvas() {
       bold: false,
       italic: false,
       align: 'center',
+      rotation: 0,
       visible: true,
       order: textLayers.length
     }
@@ -809,8 +815,12 @@ function MockupCanvas() {
                   ctx.textAlign = effectiveText.align
                   ctx.textBaseline = 'middle'
 
-                  // Draw text (scaled to preview)
-                  ctx.fillText(effectiveText.text, effectiveText.x * scaleX, effectiveText.y * scaleY)
+                  // Apply rotation (scaled to preview)
+                  ctx.translate(effectiveText.x * scaleX, effectiveText.y * scaleY)
+                  ctx.rotate((effectiveText.rotation * Math.PI) / 180)
+
+                  // Draw text at origin (already translated and scaled)
+                  ctx.fillText(effectiveText.text, 0, 0)
 
                   ctx.restore()
                 })
@@ -1375,19 +1385,24 @@ function MockupCanvas() {
                             </div>
 
                             <div>
-                              <label className="block text-xs font-medium mb-1">Alignment</label>
-                              <div className="grid grid-cols-3 gap-2">
-                                {(['left', 'center', 'right'] as const).map((align) => (
-                                  <button
-                                    key={align}
-                                    onClick={() => updateTextLayer(layer.id, { align })}
-                                    className={`text-xs py-1 rounded transition ${
-                                      effectiveLayer.align === align ? 'bg-blue-600 text-white' : 'bg-gray-600 hover:bg-gray-500'
-                                    }`}
-                                  >
-                                    {align.charAt(0).toUpperCase() + align.slice(1)}
-                                  </button>
-                                ))}
+                              <label className="block text-xs font-medium mb-1">Rotation: {effectiveLayer.rotation}°</label>
+                              <div className="flex gap-2 items-center">
+                                <input
+                                  type="range"
+                                  min="0"
+                                  max="360"
+                                  value={effectiveLayer.rotation}
+                                  onChange={(e) => updateTextLayer(layer.id, { rotation: parseInt(e.target.value) })}
+                                  className="flex-1"
+                                />
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="360"
+                                  value={effectiveLayer.rotation}
+                                  onChange={(e) => updateTextLayer(layer.id, { rotation: parseInt(e.target.value) || 0 })}
+                                  className="w-16 bg-gray-600 border border-gray-500 rounded px-2 py-1 text-xs"
+                                />
                               </div>
                             </div>
 
