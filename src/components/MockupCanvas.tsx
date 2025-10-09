@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import JSZip from 'jszip'
 
 interface Transform {
@@ -15,9 +16,10 @@ interface InteractivePreviewProps {
   designImage: HTMLImageElement | null
   transform: Transform
   onTransformChange: (updates: Partial<Transform>) => void
+  onApplyGlobally?: (transform: Transform) => void
 }
 
-function InteractivePreview({ mockupImage, designImage, transform, onTransformChange }: InteractivePreviewProps) {
+function InteractivePreview({ mockupImage, designImage, transform, onTransformChange, onApplyGlobally }: InteractivePreviewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
@@ -317,6 +319,7 @@ function InteractivePreview({ mockupImage, designImage, transform, onTransformCh
               onTransformChange(updates)
             })
           }}
+          onApplyGlobally={onApplyGlobally}
           onClose={() => setIsModalOpen(false)}
         />
       )}
@@ -330,10 +333,11 @@ interface ExpandedPreviewModalProps {
   designImage: HTMLImageElement | null
   transform: Transform
   onTransformChange: (updates: Partial<Transform>) => void
+  onApplyGlobally?: (transform: Transform) => void
   onClose: () => void
 }
 
-function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransformChange, onClose }: ExpandedPreviewModalProps) {
+function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransformChange, onApplyGlobally, onClose }: ExpandedPreviewModalProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
@@ -357,16 +361,59 @@ function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransform
     }
   }, [])
 
-  // Handle Escape key
+  // Handle keyboard shortcuts (Escape and arrow keys)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         onClose()
+        return
+      }
+
+      // Arrow key nudging
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        e.preventDefault()
+
+        if (!mockupImage) return
+
+        const nudgeAmount = e.shiftKey ? 10 : 1 // Shift for larger nudges
+        let dx = 0
+        let dy = 0
+
+        switch (e.key) {
+          case 'ArrowLeft':
+            dx = -nudgeAmount
+            break
+          case 'ArrowRight':
+            dx = nudgeAmount
+            break
+          case 'ArrowUp':
+            dy = -nudgeAmount
+            break
+          case 'ArrowDown':
+            dy = nudgeAmount
+            break
+        }
+
+        const newX = currentTransform.x + dx
+        const newY = currentTransform.y + dy
+
+        // Update local state immediately
+        setCurrentTransform(prev => ({ ...prev, x: newX, y: newY }))
+
+        // Cancel previous RAF
+        if (rafRef.current !== null) {
+          cancelAnimationFrame(rafRef.current)
+        }
+
+        // Debounce parent update using RAF
+        rafRef.current = requestAnimationFrame(() => {
+          onTransformChange({ x: newX, y: newY })
+        })
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onClose])
+  }, [onClose, currentTransform, mockupImage, onTransformChange])
 
   // Draw preview
   useEffect(() => {
@@ -648,9 +695,10 @@ function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransform
     setLastPinchDistance(null)
   }
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 bg-black bg-opacity-90 flex items-center justify-center p-4"
+      className="fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center p-4"
+      style={{ zIndex: 9999 }}
       onClick={onClose}
     >
       <div
@@ -662,9 +710,24 @@ function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransform
           <div className="text-sm text-gray-300">
             X: {currentTransform.x.toFixed(0)} • Y: {currentTransform.y.toFixed(0)} • Scale: {currentTransform.scale.toFixed(2)}x
           </div>
+          {onApplyGlobally && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                onApplyGlobally(currentTransform)
+              }}
+              className="px-3 py-1 text-sm bg-green-600 hover:bg-green-700 text-white rounded transition"
+              title="Apply these transform settings to all mockups"
+            >
+              Apply Globally
+            </button>
+          )}
           <button
-            onClick={onClose}
-            className="ml-4 px-3 py-1 text-sm bg-red-600 hover:bg-red-700 text-white rounded transition"
+            onClick={(e) => {
+              e.stopPropagation()
+              onClose()
+            }}
+            className="ml-auto px-3 py-1 text-sm bg-red-600 hover:bg-red-700 text-white rounded transition"
             title="Close (Esc)"
           >
             × Close
@@ -690,10 +753,11 @@ function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransform
 
         {/* Instructions */}
         <p className="mt-4 text-xs text-gray-400 text-center">
-          Drag to move • Scroll to scale • Shift = lock axis • Alt = scale from center • Esc to close
+          Drag to move • Scroll to scale • Arrows = nudge • Shift = lock axis • Alt = scale from center • Esc to close
         </p>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 
@@ -1183,6 +1247,22 @@ function MockupCanvas() {
     }
   }
 
+  // Apply transform globally to all mockups
+  const applyTransformGlobally = (transform: Transform) => {
+    // Update the global design transform
+    setDesign1(prev => ({
+      ...prev,
+      transform: transform
+    }))
+
+    // Clear all custom transforms and offsets so all mockups use the new global settings
+    setMockupCustomTransforms1(new Map())
+    setMockupOffsets(new Map())
+
+    // Force canvas refresh
+    setCanvasRefreshKey(prev => prev + 1)
+  }
+
   // Export all mockups as ZIP
   const handleExport = async () => {
     if (mockupImages.length === 0) return
@@ -1302,10 +1382,11 @@ function MockupCanvas() {
               <div className="space-y-4">
                 {/* Interactive Preview Box */}
                 <InteractivePreview
-                  mockupImage={mockupImages[0]}
+                  mockupImage={mockupImage}
                   designImage={getActiveDesignState().image}
                   transform={getActiveEffectiveTransform()}
                   onTransformChange={updateActiveDesignTransform}
+                  onApplyGlobally={applyTransformGlobally}
                 />
 
                 <div>
