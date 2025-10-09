@@ -262,32 +262,437 @@ function InteractivePreview({ mockupImage, designImage, transform, onTransformCh
     setLastPinchDistance(null)
   }
 
+  const [isModalOpen, setIsModalOpen] = useState(false)
+
   return (
-    <div className="bg-gray-700 rounded-lg p-4">
-      <div className="mb-2 flex justify-between items-center">
-        <label className="text-sm font-medium">Interactive Preview</label>
-        <div className="text-xs text-gray-400">
-          X: {currentTransform.x.toFixed(0)} • Y: {currentTransform.y.toFixed(0)} • Scale: {currentTransform.scale.toFixed(2)}x
+    <>
+      <div className="bg-gray-700 rounded-lg p-4">
+        <div className="mb-2 flex justify-between items-center">
+          <label className="text-sm font-medium">Interactive Preview</label>
+          <div className="flex items-center gap-2">
+            <div className="text-xs text-gray-400">
+              X: {currentTransform.x.toFixed(0)} • Y: {currentTransform.y.toFixed(0)} • Scale: {currentTransform.scale.toFixed(2)}x
+            </div>
+            <button
+              onClick={() => setIsModalOpen(true)}
+              className="px-2 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition"
+              title="Expand preview"
+            >
+              Expand
+            </button>
+          </div>
         </div>
+        <div className="relative bg-gray-800 rounded overflow-hidden" style={{ touchAction: 'none' }}>
+          <canvas
+            ref={canvasRef}
+            className="w-full h-auto cursor-move"
+            style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
+            onWheel={handleWheel}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+          />
+        </div>
+        <p className="text-xs text-gray-400 mt-2">
+          Drag to move • Scroll or pinch to scale
+        </p>
       </div>
-      <div className="relative bg-gray-800 rounded overflow-hidden" style={{ touchAction: 'none' }}>
-        <canvas
-          ref={canvasRef}
-          className="w-full h-auto cursor-move"
-          style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
-          onWheel={handleWheel}
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
+
+      {/* Expanded Modal Preview */}
+      {isModalOpen && (
+        <ExpandedPreviewModal
+          mockupImage={mockupImage}
+          designImage={designImage}
+          transform={currentTransform}
+          onTransformChange={(updates) => {
+            setCurrentTransform(prev => ({ ...prev, ...updates }))
+            if (rafRef.current !== null) {
+              cancelAnimationFrame(rafRef.current)
+            }
+            rafRef.current = requestAnimationFrame(() => {
+              onTransformChange(updates)
+            })
+          }}
+          onClose={() => setIsModalOpen(false)}
         />
+      )}
+    </>
+  )
+}
+
+// Expanded Modal Preview Component
+interface ExpandedPreviewModalProps {
+  mockupImage: HTMLImageElement | null
+  designImage: HTMLImageElement | null
+  transform: Transform
+  onTransformChange: (updates: Partial<Transform>) => void
+  onClose: () => void
+}
+
+function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransformChange, onClose }: ExpandedPreviewModalProps) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [isDragging, setIsDragging] = useState(false)
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
+  const [dragInitial, setDragInitial] = useState({ x: 0, y: 0 })
+  const rafRef = useRef<number | null>(null)
+  const [currentTransform, setCurrentTransform] = useState(transform)
+  const [lastPinchDistance, setLastPinchDistance] = useState<number | null>(null)
+  const [pinchInitialScale, setPinchInitialScale] = useState(1)
+  const [scaleAnchor, setScaleAnchor] = useState<{ x: number; y: number } | null>(null)
+
+  // Update current transform when prop changes (two-way sync)
+  useEffect(() => {
+    setCurrentTransform(transform)
+  }, [transform])
+
+  // Block body scroll when modal is open
+  useEffect(() => {
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = ''
+    }
+  }, [])
+
+  // Handle Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
+  // Draw preview
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || !mockupImage) return
+
+    const ctx = canvas.getContext('2d', { alpha: false })
+    if (!ctx) return
+
+    // Use 80% of viewport for canvas size
+    const maxWidth = window.innerWidth * 0.8
+    const maxHeight = window.innerHeight * 0.8
+    const aspectRatio = mockupImage.width / mockupImage.height
+
+    let width = maxWidth
+    let height = maxWidth / aspectRatio
+
+    if (height > maxHeight) {
+      height = maxHeight
+      width = maxHeight * aspectRatio
+    }
+
+    canvas.width = width
+    canvas.height = height
+
+    // Scale factors
+    const scaleX = width / mockupImage.width
+    const scaleY = height / mockupImage.height
+
+    // Clear and draw mockup
+    ctx.clearRect(0, 0, width, height)
+    ctx.drawImage(mockupImage, 0, 0, width, height)
+
+    // Draw design if available
+    if (designImage) {
+      ctx.save()
+      ctx.globalAlpha = currentTransform.opacity / 100
+      ctx.translate(currentTransform.x * scaleX, currentTransform.y * scaleY)
+      ctx.rotate((currentTransform.rotation * Math.PI) / 180)
+      ctx.scale(currentTransform.scale * scaleX, currentTransform.scale * scaleY)
+      ctx.drawImage(
+        designImage,
+        -designImage.width / 2,
+        -designImage.height / 2
+      )
+      ctx.restore()
+    }
+  }, [mockupImage, designImage, currentTransform])
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!mockupImage || !designImage) return
+
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const rect = canvas.getBoundingClientRect()
+    const scaleX = canvas.width / rect.width
+    const scaleY = canvas.height / rect.height
+    const mouseX = (e.clientX - rect.left) * scaleX
+    const mouseY = (e.clientY - rect.top) * scaleY
+
+    setIsDragging(true)
+    setDragStart({ x: mouseX, y: mouseY })
+    setDragInitial({ x: currentTransform.x, y: currentTransform.y })
+
+    // Set scale anchor for Alt+scroll
+    if (e.altKey) {
+      setScaleAnchor({ x: mouseX, y: mouseY })
+    }
+
+    e.preventDefault()
+  }
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isDragging || !mockupImage) return
+
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const rect = canvas.getBoundingClientRect()
+    const scaleX = canvas.width / rect.width
+    const scaleY = canvas.height / rect.height
+    const mouseX = (e.clientX - rect.left) * scaleX
+    const mouseY = (e.clientY - rect.top) * scaleY
+
+    // Calculate delta in canvas space
+    let dx = mouseX - dragStart.x
+    let dy = mouseY - dragStart.y
+
+    // Shift to lock axis
+    if (e.shiftKey) {
+      if (Math.abs(dx) > Math.abs(dy)) {
+        dy = 0
+      } else {
+        dx = 0
+      }
+    }
+
+    // Convert back to mockup space
+    const mockupScaleX = mockupImage.width / canvas.width
+    const mockupScaleY = mockupImage.height / canvas.height
+
+    const newX = dragInitial.x + (dx * mockupScaleX)
+    const newY = dragInitial.y + (dy * mockupScaleY)
+
+    // Update local state immediately for smooth rendering
+    setCurrentTransform(prev => ({ ...prev, x: newX, y: newY }))
+
+    // Cancel previous RAF
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current)
+    }
+
+    // Debounce parent update using RAF
+    rafRef.current = requestAnimationFrame(() => {
+      onTransformChange({ x: newX, y: newY })
+    })
+  }
+
+  const handleMouseUp = () => {
+    setIsDragging(false)
+    setScaleAnchor(null)
+  }
+
+  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    e.preventDefault()
+
+    if (!mockupImage) return
+
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    // Determine scroll direction and amount
+    const delta = -e.deltaY * 0.001
+    let newScale = Math.max(0.05, Math.min(3, currentTransform.scale + delta))
+
+    let newX = currentTransform.x
+    let newY = currentTransform.y
+
+    // Alt key: scale from center
+    if (e.altKey || scaleAnchor) {
+      const rect = canvas.getBoundingClientRect()
+      const scaleX = canvas.width / rect.width
+      const scaleY = canvas.height / rect.height
+
+      const anchorX = scaleAnchor ? scaleAnchor.x : (e.clientX - rect.left) * scaleX
+      const anchorY = scaleAnchor ? scaleAnchor.y : (e.clientY - rect.top) * scaleY
+
+      // Convert anchor to mockup space
+      const mockupScaleX = mockupImage.width / canvas.width
+      const mockupScaleY = mockupImage.height / canvas.height
+      const mockupAnchorX = anchorX * mockupScaleX
+      const mockupAnchorY = anchorY * mockupScaleY
+
+      // Calculate offset needed to keep anchor point fixed
+      const scaleDiff = newScale - currentTransform.scale
+      const offsetX = (mockupAnchorX - currentTransform.x) * (scaleDiff / currentTransform.scale)
+      const offsetY = (mockupAnchorY - currentTransform.y) * (scaleDiff / currentTransform.scale)
+
+      newX = currentTransform.x - offsetX
+      newY = currentTransform.y - offsetY
+    }
+
+    // Update local state immediately
+    setCurrentTransform(prev => ({ ...prev, scale: newScale, x: newX, y: newY }))
+
+    // Cancel previous RAF
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current)
+    }
+
+    // Debounce parent update using RAF
+    rafRef.current = requestAnimationFrame(() => {
+      onTransformChange({ scale: newScale, x: newX, y: newY })
+    })
+  }
+
+  // Touch handlers for pinch-to-zoom
+  const getTouchDistance = (touches: React.TouchList) => {
+    if (touches.length < 2) return null
+    const dx = touches[0].clientX - touches[1].clientX
+    const dy = touches[0].clientY - touches[1].clientY
+    return Math.sqrt(dx * dx + dy * dy)
+  }
+
+  const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (e.touches.length === 2) {
+      // Pinch gesture
+      const distance = getTouchDistance(e.touches)
+      if (distance) {
+        setLastPinchDistance(distance)
+        setPinchInitialScale(currentTransform.scale)
+      }
+      e.preventDefault()
+    } else if (e.touches.length === 1) {
+      // Single touch drag
+      if (!mockupImage || !designImage) return
+
+      const canvas = canvasRef.current
+      if (!canvas) return
+
+      const rect = canvas.getBoundingClientRect()
+      const scaleX = canvas.width / rect.width
+      const scaleY = canvas.height / rect.height
+      const touchX = (e.touches[0].clientX - rect.left) * scaleX
+      const touchY = (e.touches[0].clientY - rect.top) * scaleY
+
+      setIsDragging(true)
+      setDragStart({ x: touchX, y: touchY })
+      setDragInitial({ x: currentTransform.x, y: currentTransform.y })
+    }
+  }
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (e.touches.length === 2) {
+      // Pinch gesture
+      const distance = getTouchDistance(e.touches)
+      if (distance && lastPinchDistance) {
+        const scaleFactor = distance / lastPinchDistance
+        const newScale = Math.max(0.05, Math.min(3, pinchInitialScale * scaleFactor))
+
+        // Update local state immediately
+        setCurrentTransform(prev => ({ ...prev, scale: newScale }))
+
+        // Cancel previous RAF
+        if (rafRef.current !== null) {
+          cancelAnimationFrame(rafRef.current)
+        }
+
+        // Debounce parent update using RAF
+        rafRef.current = requestAnimationFrame(() => {
+          onTransformChange({ scale: newScale })
+        })
+      }
+      e.preventDefault()
+    } else if (e.touches.length === 1 && isDragging) {
+      // Single touch drag
+      if (!mockupImage) return
+
+      const canvas = canvasRef.current
+      if (!canvas) return
+
+      const rect = canvas.getBoundingClientRect()
+      const scaleX = canvas.width / rect.width
+      const scaleY = canvas.height / rect.height
+      const touchX = (e.touches[0].clientX - rect.left) * scaleX
+      const touchY = (e.touches[0].clientY - rect.top) * scaleY
+
+      // Calculate delta in canvas space
+      const dx = touchX - dragStart.x
+      const dy = touchY - dragStart.y
+
+      // Convert back to mockup space
+      const mockupScaleX = mockupImage.width / canvas.width
+      const mockupScaleY = mockupImage.height / canvas.height
+
+      const newX = dragInitial.x + (dx * mockupScaleX)
+      const newY = dragInitial.y + (dy * mockupScaleY)
+
+      // Update local state immediately for smooth rendering
+      setCurrentTransform(prev => ({ ...prev, x: newX, y: newY }))
+
+      // Cancel previous RAF
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current)
+      }
+
+      // Debounce parent update using RAF
+      rafRef.current = requestAnimationFrame(() => {
+        onTransformChange({ x: newX, y: newY })
+      })
+
+      e.preventDefault()
+    }
+  }
+
+  const handleTouchEnd = () => {
+    setIsDragging(false)
+    setLastPinchDistance(null)
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black bg-opacity-90 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="relative max-w-full max-h-full flex flex-col items-center"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header with controls and close button */}
+        <div className="mb-4 flex items-center gap-4 bg-gray-800 px-6 py-3 rounded-lg">
+          <div className="text-sm text-gray-300">
+            X: {currentTransform.x.toFixed(0)} • Y: {currentTransform.y.toFixed(0)} • Scale: {currentTransform.scale.toFixed(2)}x
+          </div>
+          <button
+            onClick={onClose}
+            className="ml-4 px-3 py-1 text-sm bg-red-600 hover:bg-red-700 text-white rounded transition"
+            title="Close (Esc)"
+          >
+            × Close
+          </button>
+        </div>
+
+        {/* Canvas */}
+        <div className="relative bg-gray-900 rounded-lg overflow-hidden shadow-2xl" style={{ touchAction: 'none' }}>
+          <canvas
+            ref={canvasRef}
+            className="max-w-full max-h-full cursor-move"
+            style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
+            onWheel={handleWheel}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+          />
+        </div>
+
+        {/* Instructions */}
+        <p className="mt-4 text-xs text-gray-400 text-center">
+          Drag to move • Scroll to scale • Shift = lock axis • Alt = scale from center • Esc to close
+        </p>
       </div>
-      <p className="text-xs text-gray-400 mt-2">
-        Drag to move • Scroll or pinch to scale
-      </p>
     </div>
   )
 }
