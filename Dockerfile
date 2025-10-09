@@ -1,5 +1,4 @@
-# Build stage
-FROM node:18-alpine AS build
+FROM node:18-alpine
 
 WORKDIR /app
 
@@ -7,7 +6,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies
-RUN npm ci
+RUN npm install
 
 # Copy source code
 COPY . .
@@ -15,13 +14,12 @@ COPY . .
 # Build the app
 RUN npm run build
 
-# Production stage
-FROM nginx:alpine
+# Expose port 5173
+EXPOSE 5173
 
-# Copy built files from build stage
-COPY --from=build /app/dist /usr/share/nginx/html
+# Add healthcheck
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:5173 || exit 1
 
-# Expose port 80
-EXPOSE 80
-
-CMD ["nginx", "-g", "daemon off;"]
+# Run preview server on port 5173
+CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "5173"]
