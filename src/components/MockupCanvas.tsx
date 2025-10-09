@@ -9,6 +9,289 @@ interface Transform {
   opacity: number
 }
 
+// Interactive Preview Component
+interface InteractivePreviewProps {
+  mockupImage: HTMLImageElement | null
+  designImage: HTMLImageElement | null
+  transform: Transform
+  onTransformChange: (updates: Partial<Transform>) => void
+}
+
+function InteractivePreview({ mockupImage, designImage, transform, onTransformChange }: InteractivePreviewProps) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [isDragging, setIsDragging] = useState(false)
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
+  const [dragInitial, setDragInitial] = useState({ x: 0, y: 0 })
+  const rafRef = useRef<number | null>(null)
+  const [currentTransform, setCurrentTransform] = useState(transform)
+  const [lastPinchDistance, setLastPinchDistance] = useState<number | null>(null)
+  const [pinchInitialScale, setPinchInitialScale] = useState(1)
+
+  // Update current transform when prop changes
+  useEffect(() => {
+    setCurrentTransform(transform)
+  }, [transform])
+
+  // Draw preview
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || !mockupImage) return
+
+    const ctx = canvas.getContext('2d', { alpha: false })
+    if (!ctx) return
+
+    // Set canvas size to a fixed preview size
+    const previewSize = 400
+    const aspectRatio = mockupImage.width / mockupImage.height
+    let width = previewSize
+    let height = previewSize / aspectRatio
+
+    if (aspectRatio < 1) {
+      width = previewSize * aspectRatio
+      height = previewSize
+    }
+
+    canvas.width = width
+    canvas.height = height
+
+    // Scale factors
+    const scaleX = width / mockupImage.width
+    const scaleY = height / mockupImage.height
+
+    // Clear and draw mockup
+    ctx.clearRect(0, 0, width, height)
+    ctx.drawImage(mockupImage, 0, 0, width, height)
+
+    // Draw design if available
+    if (designImage) {
+      ctx.save()
+      ctx.globalAlpha = currentTransform.opacity / 100
+      ctx.translate(currentTransform.x * scaleX, currentTransform.y * scaleY)
+      ctx.rotate((currentTransform.rotation * Math.PI) / 180)
+      ctx.scale(currentTransform.scale * scaleX, currentTransform.scale * scaleY)
+      ctx.drawImage(
+        designImage,
+        -designImage.width / 2,
+        -designImage.height / 2
+      )
+      ctx.restore()
+    }
+  }, [mockupImage, designImage, currentTransform])
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!mockupImage || !designImage) return
+
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const rect = canvas.getBoundingClientRect()
+    const scaleX = canvas.width / rect.width
+    const scaleY = canvas.height / rect.height
+    const mouseX = (e.clientX - rect.left) * scaleX
+    const mouseY = (e.clientY - rect.top) * scaleY
+
+    setIsDragging(true)
+    setDragStart({ x: mouseX, y: mouseY })
+    setDragInitial({ x: currentTransform.x, y: currentTransform.y })
+    e.preventDefault()
+  }
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isDragging || !mockupImage) return
+
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const rect = canvas.getBoundingClientRect()
+    const scaleX = canvas.width / rect.width
+    const scaleY = canvas.height / rect.height
+    const mouseX = (e.clientX - rect.left) * scaleX
+    const mouseY = (e.clientY - rect.top) * scaleY
+
+    // Calculate delta in canvas space
+    const dx = mouseX - dragStart.x
+    const dy = mouseY - dragStart.y
+
+    // Convert back to mockup space
+    const mockupScaleX = mockupImage.width / canvas.width
+    const mockupScaleY = mockupImage.height / canvas.height
+
+    const newX = dragInitial.x + (dx * mockupScaleX)
+    const newY = dragInitial.y + (dy * mockupScaleY)
+
+    // Update local state immediately for smooth rendering
+    setCurrentTransform(prev => ({ ...prev, x: newX, y: newY }))
+
+    // Cancel previous RAF
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current)
+    }
+
+    // Debounce parent update using RAF
+    rafRef.current = requestAnimationFrame(() => {
+      onTransformChange({ x: newX, y: newY })
+    })
+  }
+
+  const handleMouseUp = () => {
+    setIsDragging(false)
+  }
+
+  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    e.preventDefault()
+
+    // Determine scroll direction and amount
+    const delta = -e.deltaY * 0.001
+    const newScale = Math.max(0.05, Math.min(3, currentTransform.scale + delta))
+
+    // Update local state immediately
+    setCurrentTransform(prev => ({ ...prev, scale: newScale }))
+
+    // Cancel previous RAF
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current)
+    }
+
+    // Debounce parent update using RAF
+    rafRef.current = requestAnimationFrame(() => {
+      onTransformChange({ scale: newScale })
+    })
+  }
+
+  // Touch handlers for pinch-to-zoom
+  const getTouchDistance = (touches: React.TouchList) => {
+    if (touches.length < 2) return null
+    const dx = touches[0].clientX - touches[1].clientX
+    const dy = touches[0].clientY - touches[1].clientY
+    return Math.sqrt(dx * dx + dy * dy)
+  }
+
+  const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (e.touches.length === 2) {
+      // Pinch gesture
+      const distance = getTouchDistance(e.touches)
+      if (distance) {
+        setLastPinchDistance(distance)
+        setPinchInitialScale(currentTransform.scale)
+      }
+      e.preventDefault()
+    } else if (e.touches.length === 1) {
+      // Single touch drag
+      if (!mockupImage || !designImage) return
+
+      const canvas = canvasRef.current
+      if (!canvas) return
+
+      const rect = canvas.getBoundingClientRect()
+      const scaleX = canvas.width / rect.width
+      const scaleY = canvas.height / rect.height
+      const touchX = (e.touches[0].clientX - rect.left) * scaleX
+      const touchY = (e.touches[0].clientY - rect.top) * scaleY
+
+      setIsDragging(true)
+      setDragStart({ x: touchX, y: touchY })
+      setDragInitial({ x: currentTransform.x, y: currentTransform.y })
+    }
+  }
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (e.touches.length === 2) {
+      // Pinch gesture
+      const distance = getTouchDistance(e.touches)
+      if (distance && lastPinchDistance) {
+        const scaleFactor = distance / lastPinchDistance
+        const newScale = Math.max(0.05, Math.min(3, pinchInitialScale * scaleFactor))
+
+        // Update local state immediately
+        setCurrentTransform(prev => ({ ...prev, scale: newScale }))
+
+        // Cancel previous RAF
+        if (rafRef.current !== null) {
+          cancelAnimationFrame(rafRef.current)
+        }
+
+        // Debounce parent update using RAF
+        rafRef.current = requestAnimationFrame(() => {
+          onTransformChange({ scale: newScale })
+        })
+      }
+      e.preventDefault()
+    } else if (e.touches.length === 1 && isDragging) {
+      // Single touch drag
+      if (!mockupImage) return
+
+      const canvas = canvasRef.current
+      if (!canvas) return
+
+      const rect = canvas.getBoundingClientRect()
+      const scaleX = canvas.width / rect.width
+      const scaleY = canvas.height / rect.height
+      const touchX = (e.touches[0].clientX - rect.left) * scaleX
+      const touchY = (e.touches[0].clientY - rect.top) * scaleY
+
+      // Calculate delta in canvas space
+      const dx = touchX - dragStart.x
+      const dy = touchY - dragStart.y
+
+      // Convert back to mockup space
+      const mockupScaleX = mockupImage.width / canvas.width
+      const mockupScaleY = mockupImage.height / canvas.height
+
+      const newX = dragInitial.x + (dx * mockupScaleX)
+      const newY = dragInitial.y + (dy * mockupScaleY)
+
+      // Update local state immediately for smooth rendering
+      setCurrentTransform(prev => ({ ...prev, x: newX, y: newY }))
+
+      // Cancel previous RAF
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current)
+      }
+
+      // Debounce parent update using RAF
+      rafRef.current = requestAnimationFrame(() => {
+        onTransformChange({ x: newX, y: newY })
+      })
+
+      e.preventDefault()
+    }
+  }
+
+  const handleTouchEnd = () => {
+    setIsDragging(false)
+    setLastPinchDistance(null)
+  }
+
+  return (
+    <div className="bg-gray-700 rounded-lg p-4">
+      <div className="mb-2 flex justify-between items-center">
+        <label className="text-sm font-medium">Interactive Preview</label>
+        <div className="text-xs text-gray-400">
+          X: {currentTransform.x.toFixed(0)} • Y: {currentTransform.y.toFixed(0)} • Scale: {currentTransform.scale.toFixed(2)}x
+        </div>
+      </div>
+      <div className="relative bg-gray-800 rounded overflow-hidden" style={{ touchAction: 'none' }}>
+        <canvas
+          ref={canvasRef}
+          className="w-full h-auto cursor-move"
+          style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+          onWheel={handleWheel}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+        />
+      </div>
+      <p className="text-xs text-gray-400 mt-2">
+        Drag to move • Scroll or pinch to scale
+      </p>
+    </div>
+  )
+}
+
 interface DesignState {
   image: HTMLImageElement | null
   transform: Transform
@@ -17,21 +300,6 @@ interface DesignState {
   order: number // 0 = back, 1 = front
 }
 
-interface TextLayer {
-  id: string
-  text: string
-  x: number
-  y: number
-  fontSize: number
-  fontFamily: string
-  color: string
-  bold: boolean
-  italic: boolean
-  align: 'left' | 'center' | 'right'
-  rotation: number
-  visible: boolean
-  order: number
-}
 
 const BLEND_MODES: GlobalCompositeOperation[] = [
   'source-over',
@@ -54,7 +322,7 @@ function MockupCanvas() {
   const [selectedMockupIndex, setSelectedMockupIndex] = useState<number>(0)
   const [mockupImage, setMockupImage] = useState<HTMLImageElement | null>(null)
 
-  // Design 1 and Design 2 states
+  // Design state
   const [design1, setDesign1] = useState<DesignState>({
     image: null,
     transform: { x: 0, y: 0, scale: 1.0, rotation: 0, opacity: 100 },
@@ -63,25 +331,12 @@ function MockupCanvas() {
     order: 0,
   })
 
-  const [design2, setDesign2] = useState<DesignState>({
-    image: null,
-    transform: { x: 0, y: 0, scale: 1.0, rotation: 0, opacity: 100 },
-    blendMode: 'multiply',
-    visible: true,
-    order: 1,
-  })
-
-  // Which design is currently being edited (1 or 2)
-  const [activeDesign, setActiveDesign] = useState<1 | 2>(1)
-
-  // Per-mockup position overrides (mockupIndex -> { design1: {x, y}, design2: {x, y} })
-  const [mockupOffsets, setMockupOffsets] = useState<Map<number, { design1?: { x: number; y: number }; design2?: { x: number; y: number } }>>(new Map())
+  // Per-mockup position overrides (mockupIndex -> {x, y})
+  const [mockupOffsets, setMockupOffsets] = useState<Map<number, { x: number; y: number }>>(new Map())
 
   // Per-mockup custom transforms (mockupIndex -> custom Transform)
   const [mockupCustomTransforms1, setMockupCustomTransforms1] = useState<Map<number, Transform>>(new Map())
-  const [mockupCustomTransforms2, setMockupCustomTransforms2] = useState<Map<number, Transform>>(new Map())
   const [mockupCustomBlendModes1, setMockupCustomBlendModes1] = useState<Map<number, BlendMode>>(new Map())
-  const [mockupCustomBlendModes2, setMockupCustomBlendModes2] = useState<Map<number, BlendMode>>(new Map())
 
   // Edit mode state
   const [editMode, setEditMode] = useState<{ active: boolean; mockupIndex: number | null }>({ active: false, mockupIndex: null })
@@ -89,16 +344,10 @@ function MockupCanvas() {
   // Canvas refresh counter to force re-render of preview tiles
   const [canvasRefreshKey, setCanvasRefreshKey] = useState(0)
 
-  // Text layers state
-  const [textLayers, setTextLayers] = useState<TextLayer[]>([])
-  const [selectedTextLayerId, setSelectedTextLayerId] = useState<string | null>(null)
-  const [mockupTextOverrides, setMockupTextOverrides] = useState<Map<number, Map<string, Partial<TextLayer>>>>(new Map())
-
   // Drag state
   const [isDragging, setIsDragging] = useState(false)
   const [dragStartPos, setDragStartPos] = useState({ x: 0, y: 0 })
   const [dragInitialPos, setDragInitialPos] = useState({ x: 0, y: 0 })
-  const [dragBothDesigns, setDragBothDesigns] = useState(false)
   const [dragMockupIndex, setDragMockupIndex] = useState<number | null>(null)
 
   // Load mockup images from folder
@@ -166,21 +415,19 @@ function MockupCanvas() {
   }, [selectedMockupIndex, mockupImages])
 
   // Load design image
-  const handleDesignUpload = (designNum: 1 | 2) => (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleDesignUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
       const reader = new FileReader()
       reader.onload = (event) => {
         const img = new Image()
         img.onload = () => {
-          const setDesign = designNum === 1 ? setDesign1 : setDesign2
-
           // Center the design on canvas if mockup is available
           if (mockupImage) {
             // Auto-scale design to fit nicely on mockup (about 30% of mockup size)
             const autoScale = Math.min(mockupImage.width, mockupImage.height) * 0.3 / Math.max(img.width, img.height)
 
-            setDesign(prev => ({
+            setDesign1(prev => ({
               ...prev,
               image: img,
               transform: {
@@ -191,7 +438,7 @@ function MockupCanvas() {
               }
             }))
           } else {
-            setDesign(prev => ({ ...prev, image: img }))
+            setDesign1(prev => ({ ...prev, image: img }))
           }
         }
         img.src = event.target?.result as string
@@ -201,45 +448,37 @@ function MockupCanvas() {
   }
 
   // Get effective transform for a design on a specific mockup (considers custom overrides)
-  const getEffectiveTransform = (designNum: 1 | 2, mockupIndex: number): Transform => {
-    const design = designNum === 1 ? design1 : design2
-    const customTransforms = designNum === 1 ? mockupCustomTransforms1 : mockupCustomTransforms2
-
+  const getEffectiveTransform = (mockupIndex: number): Transform => {
     // Check if this mockup has custom transforms
-    const customTransform = customTransforms.get(mockupIndex)
+    const customTransform = mockupCustomTransforms1.get(mockupIndex)
     if (customTransform) {
       return customTransform
     }
 
     // Otherwise use global transform
-    return design.transform
+    return design1.transform
   }
 
   // Get effective blend mode for a design on a specific mockup
-  const getEffectiveBlendMode = (designNum: 1 | 2, mockupIndex: number): BlendMode => {
-    const design = designNum === 1 ? design1 : design2
-    const customBlendModes = designNum === 1 ? mockupCustomBlendModes1 : mockupCustomBlendModes2
-
-    const customBlendMode = customBlendModes.get(mockupIndex)
+  const getEffectiveBlendMode = (mockupIndex: number): BlendMode => {
+    const customBlendMode = mockupCustomBlendModes1.get(mockupIndex)
     if (customBlendMode) {
       return customBlendMode
     }
 
-    return design.blendMode
+    return design1.blendMode
   }
 
   // Helper function to draw a design with per-mockup offsets and custom transforms
   const drawDesign = (
     ctx: CanvasRenderingContext2D,
-    design: DesignState,
-    designNum: 1 | 2,
     mockupIndex: number
   ) => {
-    if (!design.image || !design.visible) return
+    if (!design1.image || !design1.visible) return
 
-    const pos = getEffectivePosition(designNum, mockupIndex)
-    const transform = getEffectiveTransform(designNum, mockupIndex)
-    const blendMode = getEffectiveBlendMode(designNum, mockupIndex)
+    const pos = getEffectivePosition(mockupIndex)
+    const transform = getEffectiveTransform(mockupIndex)
+    const blendMode = getEffectiveBlendMode(mockupIndex)
 
     ctx.save()
     ctx.globalCompositeOperation = blendMode
@@ -248,108 +487,11 @@ function MockupCanvas() {
     ctx.rotate((transform.rotation * Math.PI) / 180)
     ctx.scale(transform.scale, transform.scale)
     ctx.drawImage(
-      design.image,
-      -design.image.width / 2,
-      -design.image.height / 2
+      design1.image,
+      -design1.image.width / 2,
+      -design1.image.height / 2
     )
     ctx.restore()
-  }
-
-  // Get effective text layer properties for a specific mockup
-  const getEffectiveTextLayer = (textLayer: TextLayer, mockupIndex: number): TextLayer => {
-    const overrides = mockupTextOverrides.get(mockupIndex)?.get(textLayer.id)
-    if (overrides) {
-      return { ...textLayer, ...overrides }
-    }
-    return textLayer
-  }
-
-  // Helper function to draw text layer
-  const drawTextLayer = (
-    ctx: CanvasRenderingContext2D,
-    textLayer: TextLayer,
-    mockupIndex: number
-  ) => {
-    const effectiveText = getEffectiveTextLayer(textLayer, mockupIndex)
-    if (!effectiveText.visible || !effectiveText.text) return
-
-    ctx.save()
-
-    // Set font properties
-    const fontStyle = `${effectiveText.italic ? 'italic' : 'normal'} ${effectiveText.bold ? 'bold' : 'normal'} ${effectiveText.fontSize}px ${effectiveText.fontFamily}`
-    ctx.font = fontStyle
-    ctx.fillStyle = effectiveText.color
-    ctx.textAlign = effectiveText.align
-    ctx.textBaseline = 'middle'
-
-    // Apply rotation
-    ctx.translate(effectiveText.x, effectiveText.y)
-    ctx.rotate((effectiveText.rotation * Math.PI) / 180)
-
-    // Draw text at origin (already translated)
-    ctx.fillText(effectiveText.text, 0, 0)
-
-    ctx.restore()
-  }
-
-  // Add new text layer
-  const addTextLayer = () => {
-    const newLayer: TextLayer = {
-      id: `text-${Date.now()}`,
-      text: 'New Text',
-      x: mockupImage ? mockupImage.width / 2 : 400,
-      y: mockupImage ? mockupImage.height / 2 : 400,
-      fontSize: 48,
-      fontFamily: 'Arial',
-      color: '#000000',
-      bold: false,
-      italic: false,
-      align: 'center',
-      rotation: 0,
-      visible: true,
-      order: textLayers.length
-    }
-    setTextLayers(prev => [...prev, newLayer])
-    setSelectedTextLayerId(newLayer.id)
-    setCanvasRefreshKey(prev => prev + 1)
-  }
-
-  // Delete text layer
-  const deleteTextLayer = (id: string) => {
-    setTextLayers(prev => prev.filter(layer => layer.id !== id))
-    if (selectedTextLayerId === id) {
-      setSelectedTextLayerId(null)
-    }
-    setCanvasRefreshKey(prev => prev + 1)
-  }
-
-  // Update text layer
-  const updateTextLayer = (id: string, updates: Partial<TextLayer>) => {
-    if (editMode.active && editMode.mockupIndex !== null) {
-      // Update per-mockup override
-      setMockupTextOverrides(prev => {
-        const newMap = new Map(prev)
-        const mockupOverrides = newMap.get(editMode.mockupIndex!) || new Map()
-        const currentOverrides = mockupOverrides.get(id) || {}
-        mockupOverrides.set(id, { ...currentOverrides, ...updates })
-        newMap.set(editMode.mockupIndex!, mockupOverrides)
-        return newMap
-      })
-    } else {
-      // Update global text layer
-      setTextLayers(prev => prev.map(layer =>
-        layer.id === id ? { ...layer, ...updates } : layer
-      ))
-    }
-    setCanvasRefreshKey(prev => prev + 1)
-  }
-
-  // Toggle text layer visibility
-  const toggleTextLayerVisibility = (id: string) => {
-    const layer = textLayers.find(l => l.id === id)
-    if (layer) {
-      updateTextLayer(id, { visible: !layer.visible })
-    }
   }
 
   // Delete mockup image
@@ -362,20 +504,6 @@ function MockupCanvas() {
       const newMap = new Map(prev)
       newMap.delete(index)
       // Re-index remaining items
-      const reindexed = new Map<number, Transform>()
-      Array.from(newMap.entries()).forEach(([idx, transform]) => {
-        if (idx > index) {
-          reindexed.set(idx - 1, transform)
-        } else {
-          reindexed.set(idx, transform)
-        }
-      })
-      return reindexed
-    })
-
-    setMockupCustomTransforms2(prev => {
-      const newMap = new Map(prev)
-      newMap.delete(index)
       const reindexed = new Map<number, Transform>()
       Array.from(newMap.entries()).forEach(([idx, transform]) => {
         if (idx > index) {
@@ -401,43 +529,15 @@ function MockupCanvas() {
       return reindexed
     })
 
-    setMockupCustomBlendModes2(prev => {
-      const newMap = new Map(prev)
-      newMap.delete(index)
-      const reindexed = new Map<number, BlendMode>()
-      Array.from(newMap.entries()).forEach(([idx, blendMode]) => {
-        if (idx > index) {
-          reindexed.set(idx - 1, blendMode)
-        } else {
-          reindexed.set(idx, blendMode)
-        }
-      })
-      return reindexed
-    })
-
     setMockupOffsets(prev => {
       const newMap = new Map(prev)
       newMap.delete(index)
-      const reindexed = new Map<number, { design1?: { x: number; y: number }; design2?: { x: number; y: number } }>()
+      const reindexed = new Map<number, { x: number; y: number }>()
       Array.from(newMap.entries()).forEach(([idx, offset]) => {
         if (idx > index) {
           reindexed.set(idx - 1, offset)
         } else {
           reindexed.set(idx, offset)
-        }
-      })
-      return reindexed
-    })
-
-    setMockupTextOverrides(prev => {
-      const newMap = new Map(prev)
-      newMap.delete(index)
-      const reindexed = new Map<number, Map<string, Partial<TextLayer>>>()
-      Array.from(newMap.entries()).forEach(([idx, overrides]) => {
-        if (idx > index) {
-          reindexed.set(idx - 1, overrides)
-        } else {
-          reindexed.set(idx, overrides)
         }
       })
       return reindexed
@@ -476,57 +576,42 @@ function MockupCanvas() {
     // Draw mockup
     ctx.drawImage(mockupImage, 0, 0)
 
-    // Draw designs in order with per-mockup offsets
-    const designs = [
-      { design: design1, num: 1 as 1 | 2 },
-      { design: design2, num: 2 as 1 | 2 }
-    ].sort((a, b) => a.design.order - b.design.order)
-
-    designs.forEach(({ design, num }) => drawDesign(ctx, design, num, selectedMockupIndex))
-
-    // Draw text layers in order
-    const sortedTextLayers = [...textLayers].sort((a, b) => a.order - b.order)
-    sortedTextLayers.forEach(textLayer => drawTextLayer(ctx, textLayer, selectedMockupIndex))
-  }, [mockupImage, design1, design2, selectedMockupIndex, mockupOffsets, mockupCustomTransforms1, mockupCustomTransforms2, mockupCustomBlendModes1, mockupCustomBlendModes2, textLayers, mockupTextOverrides])
+    // Draw design
+    drawDesign(ctx, selectedMockupIndex)
+  }, [mockupImage, design1, selectedMockupIndex, mockupOffsets, mockupCustomTransforms1, mockupCustomBlendModes1])
 
   // Get effective position for a design on a specific mockup
-  const getEffectivePosition = (designNum: 1 | 2, mockupIndex: number): { x: number; y: number } => {
-    const design = designNum === 1 ? design1 : design2
-    const customTransforms = designNum === 1 ? mockupCustomTransforms1 : mockupCustomTransforms2
-
+  const getEffectivePosition = (mockupIndex: number): { x: number; y: number } => {
     // Priority 1: Check custom transforms (edit mode)
-    const customTransform = customTransforms.get(mockupIndex)
+    const customTransform = mockupCustomTransforms1.get(mockupIndex)
     if (customTransform) {
       return { x: customTransform.x, y: customTransform.y }
     }
 
     // Priority 2: Check offsets (drag without edit mode)
-    const offsets = mockupOffsets.get(mockupIndex)
-    const designKey = designNum === 1 ? 'design1' : 'design2'
-    if (offsets && offsets[designKey]) {
-      return offsets[designKey]!
+    const offset = mockupOffsets.get(mockupIndex)
+    if (offset) {
+      return offset
     }
 
     // Priority 3: Fall back to global transform
-    return { x: design.transform.x, y: design.transform.y }
+    return { x: design1.transform.x, y: design1.transform.y }
   }
 
   // Check if point is inside design's bounding box
   const hitTestDesign = (
-    design: DesignState,
     mockupIndex: number,
-    designNum: 1 | 2,
     mouseX: number,
     mouseY: number
   ): boolean => {
-    if (!design.image || !design.visible) return false
+    if (!design1.image || !design1.visible) return false
 
-    const pos = getEffectivePosition(designNum, mockupIndex)
-    const transform = getEffectiveTransform(designNum, mockupIndex)
+    const pos = getEffectivePosition(mockupIndex)
+    const transform = getEffectiveTransform(mockupIndex)
 
     // Simple bounding box hit test (ignoring rotation for simplicity)
-    const halfWidth = (design.image.width * transform.scale) / 2
-    const halfHeight = (design.image.height * transform.scale) / 2
+    const halfWidth = (design1.image.width * transform.scale) / 2
+    const halfHeight = (design1.image.height * transform.scale) / 2
 
     return (
       mouseX >= pos.x - halfWidth &&
@@ -545,22 +630,14 @@ function MockupCanvas() {
     const mouseX = (e.clientX - rect.left) * scaleX
     const mouseY = (e.clientY - rect.top) * scaleY
 
-    // Check if clicking on active design or both (with Alt)
-    const altPressed = e.altKey
-    const activeDesignHit = hitTestDesign(
-      activeDesign === 1 ? design1 : design2,
-      mockupIndex,
-      activeDesign,
-      mouseX,
-      mouseY
-    )
+    // Check if clicking on design
+    const designHit = hitTestDesign(mockupIndex, mouseX, mouseY)
 
-    if (activeDesignHit) {
-      const pos = getEffectivePosition(activeDesign, mockupIndex)
+    if (designHit) {
+      const pos = getEffectivePosition(mockupIndex)
       setIsDragging(true)
       setDragStartPos({ x: mouseX, y: mouseY })
       setDragInitialPos(pos)
-      setDragBothDesigns(altPressed)
       setDragMockupIndex(mockupIndex)
       e.preventDefault()
     }
@@ -593,50 +670,18 @@ function MockupCanvas() {
 
     // If in edit mode on this mockup, update custom transforms instead of offsets
     if (editMode.active && editMode.mockupIndex === dragMockupIndex) {
-      if (dragBothDesigns) {
-        // Update both designs' custom transforms
-        setMockupCustomTransforms1(prev => {
-          const newMap = new Map(prev)
-          const currentTransform = getEffectiveTransform(1, dragMockupIndex)
-          newMap.set(dragMockupIndex, { ...currentTransform, x: newX, y: newY })
-          return newMap
-        })
-        setMockupCustomTransforms2(prev => {
-          const newMap = new Map(prev)
-          const currentTransform = getEffectiveTransform(2, dragMockupIndex)
-          newMap.set(dragMockupIndex, { ...currentTransform, x: newX, y: newY })
-          return newMap
-        })
-      } else {
-        // Update active design's custom transform
-        const setCustomTransforms = activeDesign === 1 ? setMockupCustomTransforms1 : setMockupCustomTransforms2
-        setCustomTransforms(prev => {
-          const newMap = new Map(prev)
-          const currentTransform = getEffectiveTransform(activeDesign, dragMockupIndex)
-          newMap.set(dragMockupIndex, { ...currentTransform, x: newX, y: newY })
-          return newMap
-        })
-      }
+      // Update design's custom transform
+      setMockupCustomTransforms1(prev => {
+        const newMap = new Map(prev)
+        const currentTransform = getEffectiveTransform(dragMockupIndex)
+        newMap.set(dragMockupIndex, { ...currentTransform, x: newX, y: newY })
+        return newMap
+      })
     } else {
       // Update position offsets for non-edit-mode drag
       setMockupOffsets(prev => {
         const newMap = new Map(prev)
-        const existing = newMap.get(dragMockupIndex) || {}
-
-        if (dragBothDesigns) {
-          newMap.set(dragMockupIndex, {
-            ...existing,
-            design1: { x: newX, y: newY },
-            design2: { x: newX, y: newY }
-          })
-        } else {
-          const designKey = activeDesign === 1 ? 'design1' : 'design2'
-          newMap.set(dragMockupIndex, {
-            ...existing,
-            [designKey]: { x: newX, y: newY }
-          })
-        }
-
+        newMap.set(dragMockupIndex, { x: newX, y: newY })
         return newMap
       })
     }
@@ -648,14 +693,11 @@ function MockupCanvas() {
     }
     setIsDragging(false)
     setDragMockupIndex(null)
-    setDragBothDesigns(false)
   }
 
   // Keyboard handlers
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === '1') setActiveDesign(1)
-      if (e.key === '2') setActiveDesign(2)
       if (e.key === 'Escape' && isDragging) {
         setIsDragging(false)
         setDragMockupIndex(null)
@@ -663,22 +705,7 @@ function MockupCanvas() {
         if (dragMockupIndex !== null) {
           setMockupOffsets(prev => {
             const newMap = new Map(prev)
-            const existing = newMap.get(dragMockupIndex) || {}
-            const designKey = activeDesign === 1 ? 'design1' : 'design2'
-
-            if (dragBothDesigns) {
-              delete existing.design1
-              delete existing.design2
-            } else {
-              delete existing[designKey]
-            }
-
-            if (Object.keys(existing).length === 0) {
-              newMap.delete(dragMockupIndex)
-            } else {
-              newMap.set(dragMockupIndex, existing)
-            }
-
+            newMap.delete(dragMockupIndex)
             return newMap
           })
         }
@@ -687,24 +714,24 @@ function MockupCanvas() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isDragging, dragMockupIndex, activeDesign, dragBothDesigns])
+  }, [isDragging, dragMockupIndex])
 
   // Get active design state and setter
   const getActiveDesignState = (): DesignState => {
-    return activeDesign === 1 ? design1 : design2
+    return design1
   }
 
   // Get effective transform and blend mode for the active design (considering edit mode)
   const getActiveEffectiveTransform = (): Transform => {
     if (editMode.active && editMode.mockupIndex !== null) {
-      return getEffectiveTransform(activeDesign, editMode.mockupIndex)
+      return getEffectiveTransform(editMode.mockupIndex)
     }
     return getActiveDesignState().transform
   }
 
   const getActiveEffectiveBlendMode = (): BlendMode => {
     if (editMode.active && editMode.mockupIndex !== null) {
-      return getEffectiveBlendMode(activeDesign, editMode.mockupIndex)
+      return getEffectiveBlendMode(editMode.mockupIndex)
     }
     return getActiveDesignState().blendMode
   }
@@ -713,11 +740,10 @@ function MockupCanvas() {
     if (editMode.active && editMode.mockupIndex !== null) {
       // Update custom transform for this specific mockup
       const idx = editMode.mockupIndex
-      const setCustomTransforms = activeDesign === 1 ? setMockupCustomTransforms1 : setMockupCustomTransforms2
 
-      setCustomTransforms(prev => {
+      setMockupCustomTransforms1(prev => {
         const newMap = new Map(prev)
-        const currentTransform = getEffectiveTransform(activeDesign, idx)
+        const currentTransform = getEffectiveTransform(idx)
         newMap.set(idx, { ...currentTransform, ...updates })
         return newMap
       })
@@ -725,8 +751,7 @@ function MockupCanvas() {
       setCanvasRefreshKey(prev => prev + 1)
     } else {
       // Update global transform
-      const setDesign = activeDesign === 1 ? setDesign1 : setDesign2
-      setDesign(prev => ({
+      setDesign1(prev => ({
         ...prev,
         transform: { ...prev.transform, ...updates }
       }))
@@ -739,9 +764,8 @@ function MockupCanvas() {
     if (editMode.active && editMode.mockupIndex !== null) {
       // Update custom blend mode for this specific mockup
       const idx = editMode.mockupIndex
-      const setCustomBlendModes = activeDesign === 1 ? setMockupCustomBlendModes1 : setMockupCustomBlendModes2
 
-      setCustomBlendModes(prev => {
+      setMockupCustomBlendModes1(prev => {
         const newMap = new Map(prev)
         newMap.set(idx, mode)
         return newMap
@@ -749,20 +773,9 @@ function MockupCanvas() {
       setCanvasRefreshKey(prev => prev + 1)
     } else {
       // Update global blend mode
-      const setDesign = activeDesign === 1 ? setDesign1 : setDesign2
-      setDesign(prev => ({ ...prev, blendMode: mode }))
+      setDesign1(prev => ({ ...prev, blendMode: mode }))
       setCanvasRefreshKey(prev => prev + 1)
     }
-  }
-
-  const toggleActiveDesignVisibility = () => {
-    const setDesign = activeDesign === 1 ? setDesign1 : setDesign2
-    setDesign(prev => ({ ...prev, visible: !prev.visible }))
-  }
-
-  const swapDesignOrder = () => {
-    setDesign1(prev => ({ ...prev, order: prev.order === 0 ? 1 : 0 }))
-    setDesign2(prev => ({ ...prev, order: prev.order === 0 ? 1 : 0 }))
   }
 
   // Export all mockups as ZIP
@@ -789,17 +802,8 @@ function MockupCanvas() {
         ctx.clearRect(0, 0, tempCanvas.width, tempCanvas.height)
         ctx.drawImage(mockupImg, 0, 0)
 
-        // Draw designs in order with per-mockup offsets
-        const designs = [
-          { design: design1, num: 1 as 1 | 2 },
-          { design: design2, num: 2 as 1 | 2 }
-        ].sort((a, b) => a.design.order - b.design.order)
-
-        designs.forEach(({ design, num }) => drawDesign(ctx, design, num, index))
-
-        // Draw text layers in order
-        const sortedTextLayers = [...textLayers].sort((a, b) => a.order - b.order)
-        sortedTextLayers.forEach(textLayer => drawTextLayer(ctx, textLayer, index))
+        // Draw design
+        drawDesign(ctx, index)
 
         // Convert to blob and add to zip
         tempCanvas.toBlob((blob) => {
@@ -827,254 +831,9 @@ function MockupCanvas() {
 
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      {/* Canvas Area */}
-      <div className="lg:col-span-2 bg-gray-800 rounded-lg p-6">
-        {mockupImages.length === 0 ? (
-          <div className="text-center text-gray-400 py-20">
-            <div className="mb-4">
-              <p className="text-lg font-semibold mb-2">Upload mockup files to get started</p>
-              <p className="text-sm">1. Click "Choose Files" to select mockup images</p>
-              <p className="text-sm">2. Then upload your design file</p>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {/* Header with summary */}
-            <div className="bg-gray-700 rounded-lg p-4">
-              <h3 className="text-lg font-semibold mb-2">Mockup Preview</h3>
-              <p className="text-sm text-gray-400">
-                {mockupImages.length} mockup(s)
-                {design1.image && ` • Design 1`}
-                {design2.image && ` • Design 2`}
-              </p>
-            </div>
-
-            {/* Mockup grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4" key={`grid-${canvasRefreshKey}`}>
-              {mockupImages.map((mockupImg, index) => {
-                const tempCanvas = document.createElement('canvas')
-                const ctx = tempCanvas.getContext('2d')
-                if (!ctx) return null
-
-                // Create a smaller preview canvas for better performance
-                const previewSize = 400
-                const aspectRatio = mockupImg.width / mockupImg.height
-                let previewWidth = previewSize
-                let previewHeight = previewSize / aspectRatio
-                
-                if (aspectRatio > 1) {
-                  previewHeight = previewSize / aspectRatio
-                } else {
-                  previewWidth = previewSize * aspectRatio
-                }
-
-                tempCanvas.width = previewWidth
-                tempCanvas.height = previewHeight
-                ctx.clearRect(0, 0, tempCanvas.width, tempCanvas.height)
-                
-                // Draw mockup scaled to preview size
-                ctx.drawImage(mockupImg, 0, 0, previewWidth, previewHeight)
-
-                // Draw both designs in order (scaled to preview with per-mockup offsets)
-                const scaleX = previewWidth / mockupImg.width
-                const scaleY = previewHeight / mockupImg.height
-
-                const designs = [
-                  { design: design1, num: 1 as 1 | 2 },
-                  { design: design2, num: 2 as 1 | 2 }
-                ].sort((a, b) => a.design.order - b.design.order)
-
-                designs.forEach(({ design, num }) => {
-                  if (!design.image || !design.visible) return
-
-                  const pos = getEffectivePosition(num, index)
-                  const transform = getEffectiveTransform(num, index)
-                  const blendMode = getEffectiveBlendMode(num, index)
-
-                  ctx.save()
-                  ctx.globalCompositeOperation = blendMode
-                  ctx.globalAlpha = transform.opacity / 100
-                  ctx.translate(pos.x * scaleX, pos.y * scaleY)
-                  ctx.rotate((transform.rotation * Math.PI) / 180)
-                  ctx.scale(transform.scale * scaleX, transform.scale * scaleY)
-                  ctx.drawImage(
-                    design.image,
-                    -design.image.width / 2,
-                    -design.image.height / 2
-                  )
-                  ctx.restore()
-                })
-
-                // Draw text layers in order (scaled to preview)
-                const sortedTextLayers = [...textLayers].sort((a, b) => a.order - b.order)
-                sortedTextLayers.forEach(textLayer => {
-                  const effectiveText = getEffectiveTextLayer(textLayer, index)
-                  if (!effectiveText.visible || !effectiveText.text) return
-
-                  ctx.save()
-
-                  // Set font properties (scaled to preview)
-                  const fontStyle = `${effectiveText.italic ? 'italic' : 'normal'} ${effectiveText.bold ? 'bold' : 'normal'} ${effectiveText.fontSize * scaleX}px ${effectiveText.fontFamily}`
-                  ctx.font = fontStyle
-                  ctx.fillStyle = effectiveText.color
-                  ctx.textAlign = effectiveText.align
-                  ctx.textBaseline = 'middle'
-
-                  // Apply rotation (scaled to preview)
-                  ctx.translate(effectiveText.x * scaleX, effectiveText.y * scaleY)
-                  ctx.rotate((effectiveText.rotation * Math.PI) / 180)
-
-                  // Draw text at origin (already translated and scaled)
-                  ctx.fillText(effectiveText.text, 0, 0)
-
-                  ctx.restore()
-                })
-
-                const isSelected = selectedMockupIndex === index
-
-                return (
-                  <div
-                    key={index}
-                    className={`bg-gray-700 rounded-lg p-3 transition-all duration-200 ${
-                      isSelected ? 'ring-2 ring-blue-500 bg-gray-600' : 'hover:bg-gray-600'
-                    }`}
-                  >
-                    <div className="relative">
-                      <canvas
-                        key={`mockup-${index}-${canvasRefreshKey}`}
-                        ref={(el) => {
-                          if (el) {
-                            el.width = previewWidth
-                            el.height = previewHeight
-                            const context = el.getContext('2d')
-                            if (context) {
-                              context.drawImage(tempCanvas, 0, 0)
-                            }
-                          }
-                        }}
-                        className="w-full h-auto rounded shadow-lg cursor-pointer"
-                        style={{ cursor: isDragging && dragMockupIndex === index ? 'grabbing' : 'grab' }}
-                        onMouseDown={(e) => {
-                          handleCanvasMouseDown(e, index)
-                          setSelectedMockupIndex(index)
-                        }}
-                        onMouseMove={handleCanvasMouseMove}
-                        onMouseUp={handleCanvasMouseUp}
-                        onMouseLeave={handleCanvasMouseUp}
-                      />
-                      {isSelected && (
-                        <div className="absolute top-2 right-2 bg-blue-500 text-white px-2 py-1 rounded text-xs font-semibold pointer-events-none">
-                          Selected
-                        </div>
-                      )}
-                      {!isDragging && (mockupCustomTransforms1.has(index) || mockupCustomTransforms2.has(index) ||
-                        mockupCustomBlendModes1.has(index) || mockupCustomBlendModes2.has(index)) && (
-                        <div className="absolute top-2 left-2 bg-yellow-500 text-black px-2 py-1 rounded text-xs font-semibold pointer-events-none">
-                          Edited
-                        </div>
-                      )}
-                      {isDragging && dragMockupIndex === index && (
-                        <div className="absolute top-2 left-2 bg-black bg-opacity-70 text-white px-2 py-1 rounded text-xs font-mono pointer-events-none">
-                          {dragBothDesigns ? 'Both' : `Design ${activeDesign}`}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="mt-3 space-y-2">
-                      <p className="text-center text-sm font-medium text-white">
-                        Mockup {index + 1}
-                      </p>
-                      <p className="text-center text-xs text-gray-400">
-                        {mockupImg.width} × {mockupImg.height}px
-                      </p>
-                      {(design1.image || design2.image) && (
-                        <div className="flex justify-center space-x-2 text-xs">
-                          {design1.image && design1.visible && (
-                            <span className="text-green-400">✓ Design 1</span>
-                          )}
-                          {design2.image && design2.visible && (
-                            <span className="text-blue-400">✓ Design 2</span>
-                          )}
-                        </div>
-                      )}
-                      <div className="flex gap-2">
-                        {(design1.image || design2.image) && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setEditMode({ active: true, mockupIndex: index })
-                              setSelectedMockupIndex(index)
-                            }}
-                            className={`flex-1 text-xs py-2 rounded transition ${
-                              editMode.active && editMode.mockupIndex === index
-                                ? 'bg-blue-600 text-white font-semibold'
-                                : 'bg-gray-600 hover:bg-gray-500 text-white'
-                            }`}
-                          >
-                            {editMode.active && editMode.mockupIndex === index ? '✏️ Editing...' : '✏️ Edit'}
-                          </button>
-                        )}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            if (confirm(`Delete Mockup ${index + 1}?`)) {
-                              deleteMockup(index)
-                            }
-                          }}
-                          className="px-3 text-xs py-2 rounded transition bg-red-600 hover:bg-red-700 text-white"
-                          title="Delete mockup"
-                        >
-                          🗑️
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-
-            {/* Controls for selected mockup */}
-            {mockupImages.length > 0 && (
-              <div className="bg-gray-700 rounded-lg p-4">
-                <h4 className="text-md font-semibold mb-3">
-                  Selected: Mockup {selectedMockupIndex + 1}
-                </h4>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <span className="text-gray-400">Dimensions:</span>
-                    <span className="text-white ml-2">
-                      {mockupImages[selectedMockupIndex]?.width} × {mockupImages[selectedMockupIndex]?.height}px
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-gray-400">Designs:</span>
-                    <span className="text-white ml-2">
-                      {design1.image && `D1: ${design1.image.width}×${design1.image.height}px`}
-                      {design1.image && design2.image && ' • '}
-                      {design2.image && `D2: ${design2.image.width}×${design2.image.height}px`}
-                      {!design1.image && !design2.image && 'None'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Hidden canvas for export */}
-        <canvas
-          ref={canvasRef}
-          className="hidden"
-          onMouseDown={(e) => handleCanvasMouseDown(e, selectedMockupIndex)}
-          onMouseMove={handleCanvasMouseMove}
-          onMouseUp={handleCanvasMouseUp}
-          onMouseLeave={handleCanvasMouseUp}
-        />
-      </div>
-
-      {/* Controls Panel */}
-      <div className="bg-gray-800 rounded-lg p-6 space-y-6">
+    <div className="flex flex-col lg:flex-row gap-6">
+      {/* Controls Panel - Left Sidebar */}
+      <div className="lg:w-96 bg-gray-800 rounded-lg p-6 space-y-6 lg:sticky lg:top-6 lg:self-start">
         {/* File Uploads */}
         <div>
           <h2 className="text-xl font-semibold mb-4">Upload Images</h2>
@@ -1105,36 +864,18 @@ function MockupCanvas() {
 
             <div>
               <label className="block text-sm font-medium mb-2">
-                Design 1 (transparent PNG)
+                Design (transparent PNG)
               </label>
               <input
                 type="file"
                 accept="image/*"
-                onChange={handleDesignUpload(1)}
+                onChange={handleDesignUpload}
                 className="block w-full text-sm text-gray-400 border border-gray-600 rounded px-3 py-2 bg-gray-700 hover:bg-gray-600 cursor-pointer file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-green-600 file:text-white hover:file:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={mockupImages.length === 0}
               />
               {design1.image && (
                 <p className="text-xs text-green-400 mt-1">
-                  ✓ Design 1 loaded: {design1.image.width} x {design1.image.height}px
-                </p>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2">
-                Design 2 (transparent PNG)
-              </label>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handleDesignUpload(2)}
-                className="block w-full text-sm text-gray-400 border border-gray-600 rounded px-3 py-2 bg-gray-700 hover:bg-gray-600 cursor-pointer file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={mockupImages.length === 0}
-              />
-              {design2.image && (
-                <p className="text-xs text-blue-400 mt-1">
-                  ✓ Design 2 loaded: {design2.image.width} x {design2.image.height}px
+                  ✓ Design loaded: {design1.image.width} x {design1.image.height}px
                 </p>
               )}
             </div>
@@ -1143,162 +884,24 @@ function MockupCanvas() {
 
 
         {/* Design Controls */}
-        {(design1.image || design2.image) && mockupImages.length > 0 && (
+        {design1.image && mockupImages.length > 0 && (
           <>
-            {/* Edit Mode Header */}
-            {editMode.active && editMode.mockupIndex !== null && (
-              <div className="bg-blue-900 rounded-lg p-4 mb-4">
-                <div className="flex justify-between items-center mb-3">
-                  <h2 className="text-lg font-semibold">✏️ Editing Mockup {editMode.mockupIndex + 1}</h2>
-                  <button
-                    onClick={() => setEditMode({ active: false, mockupIndex: null })}
-                    className="bg-gray-600 hover:bg-gray-500 text-white px-3 py-1 rounded text-sm transition"
-                  >
-                    Exit Edit Mode
-                  </button>
-                </div>
-                <p className="text-sm text-gray-300">
-                  Changes apply only to Mockup {editMode.mockupIndex + 1}
-                </p>
-                <button
-                  onClick={() => {
-                    const idx = editMode.mockupIndex!
-                    setMockupCustomTransforms1(prev => {
-                      const newMap = new Map(prev)
-                      newMap.delete(idx)
-                      return newMap
-                    })
-                    setMockupCustomTransforms2(prev => {
-                      const newMap = new Map(prev)
-                      newMap.delete(idx)
-                      return newMap
-                    })
-                    setMockupCustomBlendModes1(prev => {
-                      const newMap = new Map(prev)
-                      newMap.delete(idx)
-                      return newMap
-                    })
-                    setMockupCustomBlendModes2(prev => {
-                      const newMap = new Map(prev)
-                      newMap.delete(idx)
-                      return newMap
-                    })
-                    setMockupOffsets(prev => {
-                      const newMap = new Map(prev)
-                      newMap.delete(idx)
-                      return newMap
-                    })
-                  }}
-                  className="mt-2 w-full bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded text-sm transition"
-                >
-                  Reset to Global Settings
-                </button>
-              </div>
-            )}
-
-            {/* Active Design Selector */}
-            <div className="bg-gray-700 rounded-lg p-4 mb-6">
-              <h2 className="text-lg font-semibold mb-3">Active Design</h2>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setActiveDesign(1)}
-                  disabled={!design1.image}
-                  className={`flex-1 py-2 px-4 rounded font-semibold transition ${
-                    activeDesign === 1
-                      ? 'bg-green-600 text-white'
-                      : 'bg-gray-600 text-gray-300 hover:bg-gray-500 disabled:opacity-30 disabled:cursor-not-allowed'
-                  }`}
-                >
-                  Design 1
-                </button>
-                <button
-                  onClick={() => setActiveDesign(2)}
-                  disabled={!design2.image}
-                  className={`flex-1 py-2 px-4 rounded font-semibold transition ${
-                    activeDesign === 2
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-600 text-gray-300 hover:bg-gray-500 disabled:opacity-30 disabled:cursor-not-allowed'
-                  }`}
-                >
-                  Design 2
-                </button>
-              </div>
-
-              <div className="mt-3 flex gap-2">
-                <button
-                  onClick={toggleActiveDesignVisibility}
-                  className="flex-1 text-sm bg-gray-600 hover:bg-gray-700 text-white py-2 px-3 rounded transition"
-                >
-                  {getActiveDesignState().visible ? '👁️ Hide' : '👁️‍🗨️ Show'}
-                </button>
-                <button
-                  onClick={swapDesignOrder}
-                  className="flex-1 text-sm bg-purple-600 hover:bg-purple-700 text-white py-2 px-3 rounded transition"
-                >
-                  ↕️ Swap Order
-                </button>
-              </div>
-
-            </div>
-
             <div>
               <h2 className="text-xl font-semibold mb-4">
-                Transform - Design {activeDesign}
+                Transform
                 {editMode.active && editMode.mockupIndex !== null && (
                   <span className="text-sm text-blue-400 ml-2">(Mockup {editMode.mockupIndex + 1})</span>
                 )}
               </h2>
 
               <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium mb-2">
-                    Horizontal (X): {getActiveEffectiveTransform().x.toFixed(0)}px
-                  </label>
-                  <input
-                    type="range"
-                    min="0"
-                    max={mockupImage?.width || 1000}
-                    step="1"
-                    value={getActiveEffectiveTransform().x}
-                    onChange={(e) => updateActiveDesignTransform({ x: parseFloat(e.target.value) })}
-                    className="w-full"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-2">
-                    Vertical (Y): {getActiveEffectiveTransform().y.toFixed(0)}px
-                  </label>
-                  <input
-                    type="range"
-                    min="0"
-                    max={mockupImage?.height || 1000}
-                    step="1"
-                    value={getActiveEffectiveTransform().y}
-                    onChange={(e) => updateActiveDesignTransform({ y: parseFloat(e.target.value) })}
-                    className="w-full"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-2">
-                    Scale: {getActiveEffectiveTransform().scale.toFixed(2)}x
-                  </label>
-                  <input
-                    type="range"
-                    min="0.05"
-                    max="3"
-                    step="0.01"
-                    value={getActiveEffectiveTransform().scale}
-                    onChange={(e) => updateActiveDesignTransform({ scale: parseFloat(e.target.value) })}
-                    className="w-full"
-                  />
-                  <div className="flex justify-between text-xs text-gray-400 mt-1">
-                    <span>0.05x</span>
-                    <span>1.5x</span>
-                    <span>3.0x</span>
-                  </div>
-                </div>
+                {/* Interactive Preview Box */}
+                <InteractivePreview
+                  mockupImage={mockupImages[0]}
+                  designImage={getActiveDesignState().image}
+                  transform={getActiveEffectiveTransform()}
+                  onTransformChange={updateActiveDesignTransform}
+                />
 
                 <div>
                   <label className="block text-sm font-medium mb-2">
@@ -1385,180 +988,6 @@ function MockupCanvas() {
               </p>
             </div>
 
-            {/* Text Layers */}
-            <div>
-              <h2 className="text-xl font-semibold mb-4">Text Layers</h2>
-
-              <button
-                onClick={addTextLayer}
-                className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded transition mb-4"
-              >
-                + Add Text Layer
-              </button>
-
-              {textLayers.length > 0 && (
-                <div className="space-y-3">
-                  {textLayers.map((layer) => {
-                    const isSelected = selectedTextLayerId === layer.id
-                    const effectiveLayer = editMode.active && editMode.mockupIndex !== null
-                      ? getEffectiveTextLayer(layer, editMode.mockupIndex)
-                      : layer
-
-                    return (
-                      <div
-                        key={layer.id}
-                        className={`bg-gray-700 rounded-lg p-3 ${isSelected ? 'ring-2 ring-blue-500' : ''}`}
-                      >
-                        <div className="flex justify-between items-center mb-2">
-                          <button
-                            onClick={() => setSelectedTextLayerId(isSelected ? null : layer.id)}
-                            className="text-sm font-semibold text-white hover:text-blue-400 flex-1 text-left"
-                          >
-                            {layer.text.substring(0, 20) || 'Empty Text'}
-                          </button>
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => toggleTextLayerVisibility(layer.id)}
-                              className="text-xs px-2 py-1 rounded bg-gray-600 hover:bg-gray-500"
-                            >
-                              {effectiveLayer.visible ? '👁️' : '👁️‍🗨️'}
-                            </button>
-                            <button
-                              onClick={() => deleteTextLayer(layer.id)}
-                              className="text-xs px-2 py-1 rounded bg-red-600 hover:bg-red-700"
-                            >
-                              🗑️
-                            </button>
-                          </div>
-                        </div>
-
-                        {isSelected && (
-                          <div className="space-y-2 mt-3 pt-3 border-t border-gray-600">
-                            <div>
-                              <label className="block text-xs font-medium mb-1">Text</label>
-                              <input
-                                type="text"
-                                value={effectiveLayer.text}
-                                onChange={(e) => updateTextLayer(layer.id, { text: e.target.value })}
-                                className="w-full bg-gray-600 border border-gray-500 rounded px-2 py-1 text-sm"
-                              />
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                <label className="block text-xs font-medium mb-1">Font Size: {effectiveLayer.fontSize}px</label>
-                                <input
-                                  type="range"
-                                  min="12"
-                                  max="200"
-                                  value={effectiveLayer.fontSize}
-                                  onChange={(e) => updateTextLayer(layer.id, { fontSize: parseInt(e.target.value) })}
-                                  className="w-full"
-                                />
-                              </div>
-
-                              <div>
-                                <label className="block text-xs font-medium mb-1">Color</label>
-                                <input
-                                  type="color"
-                                  value={effectiveLayer.color}
-                                  onChange={(e) => updateTextLayer(layer.id, { color: e.target.value })}
-                                  className="w-full h-8 rounded cursor-pointer"
-                                />
-                              </div>
-                            </div>
-
-                            <div>
-                              <label className="block text-xs font-medium mb-1">Font Family</label>
-                              <select
-                                value={effectiveLayer.fontFamily}
-                                onChange={(e) => updateTextLayer(layer.id, { fontFamily: e.target.value })}
-                                className="w-full bg-gray-600 border border-gray-500 rounded px-2 py-1 text-sm"
-                              >
-                                <option value="Arial">Arial</option>
-                                <option value="Helvetica">Helvetica</option>
-                                <option value="Times New Roman">Times New Roman</option>
-                                <option value="Georgia">Georgia</option>
-                                <option value="Courier New">Courier New</option>
-                                <option value="Verdana">Verdana</option>
-                                <option value="Impact">Impact</option>
-                              </select>
-                            </div>
-
-                            <div className="flex gap-2">
-                              <button
-                                onClick={() => updateTextLayer(layer.id, { bold: !effectiveLayer.bold })}
-                                className={`flex-1 text-xs py-1 rounded transition ${
-                                  effectiveLayer.bold ? 'bg-blue-600 text-white' : 'bg-gray-600 hover:bg-gray-500'
-                                }`}
-                              >
-                                <strong>B</strong>
-                              </button>
-                              <button
-                                onClick={() => updateTextLayer(layer.id, { italic: !effectiveLayer.italic })}
-                                className={`flex-1 text-xs py-1 rounded transition ${
-                                  effectiveLayer.italic ? 'bg-blue-600 text-white' : 'bg-gray-600 hover:bg-gray-500'
-                                }`}
-                              >
-                                <em>I</em>
-                              </button>
-                            </div>
-
-                            <div>
-                              <label className="block text-xs font-medium mb-1">Rotation: {effectiveLayer.rotation}°</label>
-                              <div className="flex gap-2 items-center">
-                                <input
-                                  type="range"
-                                  min="0"
-                                  max="360"
-                                  value={effectiveLayer.rotation}
-                                  onChange={(e) => updateTextLayer(layer.id, { rotation: parseInt(e.target.value) })}
-                                  className="flex-1"
-                                />
-                                <input
-                                  type="number"
-                                  min="0"
-                                  max="360"
-                                  value={effectiveLayer.rotation}
-                                  onChange={(e) => updateTextLayer(layer.id, { rotation: parseInt(e.target.value) || 0 })}
-                                  className="w-16 bg-gray-600 border border-gray-500 rounded px-2 py-1 text-xs"
-                                />
-                              </div>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                <label className="block text-xs font-medium mb-1">X: {effectiveLayer.x.toFixed(0)}</label>
-                                <input
-                                  type="range"
-                                  min="0"
-                                  max={mockupImage?.width || 1000}
-                                  value={effectiveLayer.x}
-                                  onChange={(e) => updateTextLayer(layer.id, { x: parseFloat(e.target.value) })}
-                                  className="w-full"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-xs font-medium mb-1">Y: {effectiveLayer.y.toFixed(0)}</label>
-                                <input
-                                  type="range"
-                                  min="0"
-                                  max={mockupImage?.height || 1000}
-                                  value={effectiveLayer.y}
-                                  onChange={(e) => updateTextLayer(layer.id, { y: parseFloat(e.target.value) })}
-                                  className="w-full"
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-
             {/* Export */}
             <div>
               <h2 className="text-xl font-semibold mb-4">Export</h2>
@@ -1567,26 +996,268 @@ function MockupCanvas() {
                   onClick={handleExport}
                   className="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-6 rounded transition"
                 >
-                  📦 Export as ZIP ({mockupImages.length} files)
+                  Download
                 </button>
-                
+
                 <div className="bg-gray-700 rounded-lg p-3">
                   <h4 className="text-sm font-semibold mb-2">Export Info:</h4>
                   <div className="text-xs text-gray-400 space-y-1">
                     <p>• {mockupImages.length} mockup images</p>
                     {design1.image && (
-                      <p>• Design 1: {design1.image.width}×{design1.image.height}px {design1.visible ? '' : '(hidden)'}</p>
+                      <p>• Design: {design1.image.width}×{design1.image.height}px {design1.visible ? '' : '(hidden)'}</p>
                     )}
-                    {design2.image && (
-                      <p>• Design 2: {design2.image.width}×{design2.image.height}px {design2.visible ? '' : '(hidden)'}</p>
-                    )}
-                    <p>• Layer order: {design1.order === 0 ? 'Design 1 back, Design 2 front' : 'Design 2 back, Design 1 front'}</p>
                   </div>
                 </div>
               </div>
             </div>
           </>
         )}
+      </div>
+
+      {/* Mockup Grid Area - Right Column (Fluid) */}
+      <div className="flex-1 bg-gray-800 rounded-lg p-6">
+        {mockupImages.length === 0 ? (
+          <div className="text-center text-gray-400 py-20">
+            <div className="mb-4">
+              <p className="text-lg font-semibold mb-2">Upload mockup files to get started</p>
+              <p className="text-sm">1. Click "Choose Files" to select mockup images</p>
+              <p className="text-sm">2. Then upload your design file</p>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {/* Header with summary */}
+            <div className="bg-gray-700 rounded-lg p-4">
+              <h3 className="text-lg font-semibold mb-2">Mockup Preview</h3>
+              <p className="text-sm text-gray-400">
+                {mockupImages.length} mockup(s)
+                {design1.image && ` • Design loaded`}
+              </p>
+            </div>
+
+            {/* Edit Mode Header */}
+            {editMode.active && editMode.mockupIndex !== null && (
+              <div className="bg-blue-900 rounded-lg p-4">
+                <div className="flex justify-between items-center mb-3">
+                  <h2 className="text-lg font-semibold">✏️ Editing Mockup {editMode.mockupIndex + 1}</h2>
+                  <button
+                    onClick={() => setEditMode({ active: false, mockupIndex: null })}
+                    className="bg-gray-600 hover:bg-gray-500 text-white px-3 py-1 rounded text-sm transition"
+                  >
+                    Exit Edit Mode
+                  </button>
+                </div>
+                <p className="text-sm text-gray-300">
+                  Changes apply only to Mockup {editMode.mockupIndex + 1}
+                </p>
+                <button
+                  onClick={() => {
+                    const idx = editMode.mockupIndex!
+                    setMockupCustomTransforms1(prev => {
+                      const newMap = new Map(prev)
+                      newMap.delete(idx)
+                      return newMap
+                    })
+                    setMockupCustomBlendModes1(prev => {
+                      const newMap = new Map(prev)
+                      newMap.delete(idx)
+                      return newMap
+                    })
+                    setMockupOffsets(prev => {
+                      const newMap = new Map(prev)
+                      newMap.delete(idx)
+                      return newMap
+                    })
+                  }}
+                  className="mt-2 w-full bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded text-sm transition"
+                >
+                  Reset to Global Settings
+                </button>
+              </div>
+            )}
+
+            {/* Mockup grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4" key={`grid-${canvasRefreshKey}`}>
+              {mockupImages.map((mockupImg, index) => {
+                const tempCanvas = document.createElement('canvas')
+                const ctx = tempCanvas.getContext('2d')
+                if (!ctx) return null
+
+                // Create a smaller preview canvas for better performance
+                const previewSize = 400
+                const aspectRatio = mockupImg.width / mockupImg.height
+                let previewWidth = previewSize
+                let previewHeight = previewSize / aspectRatio
+                
+                if (aspectRatio > 1) {
+                  previewHeight = previewSize / aspectRatio
+                } else {
+                  previewWidth = previewSize * aspectRatio
+                }
+
+                tempCanvas.width = previewWidth
+                tempCanvas.height = previewHeight
+                ctx.clearRect(0, 0, tempCanvas.width, tempCanvas.height)
+                
+                // Draw mockup scaled to preview size
+                ctx.drawImage(mockupImg, 0, 0, previewWidth, previewHeight)
+
+                // Draw design (scaled to preview with per-mockup offsets)
+                const scaleX = previewWidth / mockupImg.width
+                const scaleY = previewHeight / mockupImg.height
+
+                if (design1.image && design1.visible) {
+                  const pos = getEffectivePosition(index)
+                  const transform = getEffectiveTransform(index)
+                  const blendMode = getEffectiveBlendMode(index)
+
+                  ctx.save()
+                  ctx.globalCompositeOperation = blendMode
+                  ctx.globalAlpha = transform.opacity / 100
+                  ctx.translate(pos.x * scaleX, pos.y * scaleY)
+                  ctx.rotate((transform.rotation * Math.PI) / 180)
+                  ctx.scale(transform.scale * scaleX, transform.scale * scaleY)
+                  ctx.drawImage(
+                    design1.image,
+                    -design1.image.width / 2,
+                    -design1.image.height / 2
+                  )
+                  ctx.restore()
+                }
+
+                const isSelected = selectedMockupIndex === index
+
+                return (
+                  <div
+                    key={index}
+                    className={`bg-gray-700 rounded-lg p-3 transition-all duration-200 ${
+                      isSelected ? 'ring-2 ring-blue-500 bg-gray-600' : 'hover:bg-gray-600'
+                    }`}
+                  >
+                    <div className="relative">
+                      <canvas
+                        key={`mockup-${index}-${canvasRefreshKey}`}
+                        ref={(el) => {
+                          if (el) {
+                            el.width = previewWidth
+                            el.height = previewHeight
+                            const context = el.getContext('2d')
+                            if (context) {
+                              context.drawImage(tempCanvas, 0, 0)
+                            }
+                          }
+                        }}
+                        className="w-full h-auto rounded shadow-lg cursor-pointer"
+                        style={{ cursor: isDragging && dragMockupIndex === index ? 'grabbing' : 'grab' }}
+                        onMouseDown={(e) => {
+                          handleCanvasMouseDown(e, index)
+                          setSelectedMockupIndex(index)
+                        }}
+                        onMouseMove={handleCanvasMouseMove}
+                        onMouseUp={handleCanvasMouseUp}
+                        onMouseLeave={handleCanvasMouseUp}
+                      />
+                      {isSelected && (
+                        <div className="absolute top-2 right-2 bg-blue-500 text-white px-2 py-1 rounded text-xs font-semibold pointer-events-none">
+                          Selected
+                        </div>
+                      )}
+                      {!isDragging && (mockupCustomTransforms1.has(index) || mockupCustomBlendModes1.has(index)) && (
+                        <div className="absolute top-2 left-2 bg-yellow-500 text-black px-2 py-1 rounded text-xs font-semibold pointer-events-none">
+                          Edited
+                        </div>
+                      )}
+                      {isDragging && dragMockupIndex === index && (
+                        <div className="absolute top-2 left-2 bg-black bg-opacity-70 text-white px-2 py-1 rounded text-xs font-mono pointer-events-none">
+                          Moving Design
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mt-3 space-y-2">
+                      <p className="text-center text-sm font-medium text-white">
+                        Mockup {index + 1}
+                      </p>
+                      <p className="text-center text-xs text-gray-400">
+                        {mockupImg.width} × {mockupImg.height}px
+                      </p>
+                      {design1.image && (
+                        <div className="flex justify-center space-x-2 text-xs">
+                          {design1.image && design1.visible && (
+                            <span className="text-green-400">✓ Design</span>
+                          )}
+                        </div>
+                      )}
+                      <div className="flex gap-2">
+                        {design1.image && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setEditMode({ active: true, mockupIndex: index })
+                              setSelectedMockupIndex(index)
+                            }}
+                            className={`flex-1 text-xs py-2 rounded transition ${
+                              editMode.active && editMode.mockupIndex === index
+                                ? 'bg-blue-600 text-white font-semibold'
+                                : 'bg-gray-600 hover:bg-gray-500 text-white'
+                            }`}
+                          >
+                            {editMode.active && editMode.mockupIndex === index ? '✏️ Editing...' : '✏️ Edit'}
+                          </button>
+                        )}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (confirm(`Delete Mockup ${index + 1}?`)) {
+                              deleteMockup(index)
+                            }
+                          }}
+                          className="px-3 text-xs py-2 rounded transition bg-red-600 hover:bg-red-700 text-white"
+                          title="Delete mockup"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Controls for selected mockup */}
+            {mockupImages.length > 0 && (
+              <div className="bg-gray-700 rounded-lg p-4">
+                <h4 className="text-md font-semibold mb-3">
+                  Selected: Mockup {selectedMockupIndex + 1}
+                </h4>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <span className="text-gray-400">Dimensions:</span>
+                    <span className="text-white ml-2">
+                      {mockupImages[selectedMockupIndex]?.width} × {mockupImages[selectedMockupIndex]?.height}px
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-400">Design:</span>
+                    <span className="text-white ml-2">
+                      {design1.image ? `${design1.image.width}×${design1.image.height}px` : 'None'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Hidden canvas for export */}
+        <canvas
+          ref={canvasRef}
+          className="hidden"
+          onMouseDown={(e) => handleCanvasMouseDown(e, selectedMockupIndex)}
+          onMouseMove={handleCanvasMouseMove}
+          onMouseUp={handleCanvasMouseUp}
+          onMouseLeave={handleCanvasMouseUp}
+        />
       </div>
     </div>
   )
