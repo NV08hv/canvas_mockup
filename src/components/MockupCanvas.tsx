@@ -6,6 +6,8 @@ interface Transform {
   x: number
   y: number
   scale: number
+  scaleX: number
+  scaleY: number
   rotation: number
   opacity: number
 }
@@ -16,23 +18,15 @@ interface InteractivePreviewProps {
   designImage: HTMLImageElement | null
   transform: Transform
   onTransformChange: (updates: Partial<Transform>) => void
-  onApplyGlobally?: (transform: Transform) => void
 }
 
-function InteractivePreview({ mockupImage, designImage, transform, onTransformChange, onApplyGlobally }: InteractivePreviewProps) {
+function InteractivePreview({ mockupImage, designImage, transform, onTransformChange }: InteractivePreviewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
   const [dragInitial, setDragInitial] = useState({ x: 0, y: 0 })
-  const rafRef = useRef<number | null>(null)
-  const [currentTransform, setCurrentTransform] = useState(transform)
   const [lastPinchDistance, setLastPinchDistance] = useState<number | null>(null)
   const [pinchInitialScale, setPinchInitialScale] = useState(1)
-
-  // Update current transform when prop changes
-  useEffect(() => {
-    setCurrentTransform(transform)
-  }, [transform])
 
   // Draw preview
   useEffect(() => {
@@ -67,10 +61,10 @@ function InteractivePreview({ mockupImage, designImage, transform, onTransformCh
     // Draw design if available
     if (designImage) {
       ctx.save()
-      ctx.globalAlpha = currentTransform.opacity / 100
-      ctx.translate(currentTransform.x * scaleX, currentTransform.y * scaleY)
-      ctx.rotate((currentTransform.rotation * Math.PI) / 180)
-      ctx.scale(currentTransform.scale * scaleX, currentTransform.scale * scaleY)
+      ctx.globalAlpha = transform.opacity / 100
+      ctx.translate(transform.x * scaleX, transform.y * scaleY)
+      ctx.rotate((transform.rotation * Math.PI) / 180)
+      ctx.scale(transform.scale * transform.scaleX * scaleX, transform.scale * transform.scaleY * scaleY)
       ctx.drawImage(
         designImage,
         -designImage.width / 2,
@@ -78,7 +72,7 @@ function InteractivePreview({ mockupImage, designImage, transform, onTransformCh
       )
       ctx.restore()
     }
-  }, [mockupImage, designImage, currentTransform])
+  }, [mockupImage, designImage, transform])
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!mockupImage || !designImage) return
@@ -94,7 +88,7 @@ function InteractivePreview({ mockupImage, designImage, transform, onTransformCh
 
     setIsDragging(true)
     setDragStart({ x: mouseX, y: mouseY })
-    setDragInitial({ x: currentTransform.x, y: currentTransform.y })
+    setDragInitial({ x: transform.x, y: transform.y })
     e.preventDefault()
   }
 
@@ -121,18 +115,8 @@ function InteractivePreview({ mockupImage, designImage, transform, onTransformCh
     const newX = dragInitial.x + (dx * mockupScaleX)
     const newY = dragInitial.y + (dy * mockupScaleY)
 
-    // Update local state immediately for smooth rendering
-    setCurrentTransform(prev => ({ ...prev, x: newX, y: newY }))
-
-    // Cancel previous RAF
-    if (rafRef.current !== null) {
-      cancelAnimationFrame(rafRef.current)
-    }
-
-    // Debounce parent update using RAF
-    rafRef.current = requestAnimationFrame(() => {
-      onTransformChange({ x: newX, y: newY })
-    })
+    // Update global state immediately to affect all mockups
+    onTransformChange({ x: newX, y: newY })
   }
 
   const handleMouseUp = () => {
@@ -144,20 +128,10 @@ function InteractivePreview({ mockupImage, designImage, transform, onTransformCh
 
     // Determine scroll direction and amount
     const delta = -e.deltaY * 0.001
-    const newScale = Math.max(0.05, Math.min(3, currentTransform.scale + delta))
+    const newScale = Math.max(0.05, Math.min(3, transform.scale + delta))
 
-    // Update local state immediately
-    setCurrentTransform(prev => ({ ...prev, scale: newScale }))
-
-    // Cancel previous RAF
-    if (rafRef.current !== null) {
-      cancelAnimationFrame(rafRef.current)
-    }
-
-    // Debounce parent update using RAF
-    rafRef.current = requestAnimationFrame(() => {
-      onTransformChange({ scale: newScale })
-    })
+    // Update global state immediately to affect all mockups
+    onTransformChange({ scale: newScale })
   }
 
   // Touch handlers for pinch-to-zoom
@@ -174,7 +148,7 @@ function InteractivePreview({ mockupImage, designImage, transform, onTransformCh
       const distance = getTouchDistance(e.touches)
       if (distance) {
         setLastPinchDistance(distance)
-        setPinchInitialScale(currentTransform.scale)
+        setPinchInitialScale(transform.scale)
       }
       e.preventDefault()
     } else if (e.touches.length === 1) {
@@ -192,7 +166,7 @@ function InteractivePreview({ mockupImage, designImage, transform, onTransformCh
 
       setIsDragging(true)
       setDragStart({ x: touchX, y: touchY })
-      setDragInitial({ x: currentTransform.x, y: currentTransform.y })
+      setDragInitial({ x: transform.x, y: transform.y })
     }
   }
 
@@ -204,18 +178,8 @@ function InteractivePreview({ mockupImage, designImage, transform, onTransformCh
         const scaleFactor = distance / lastPinchDistance
         const newScale = Math.max(0.05, Math.min(3, pinchInitialScale * scaleFactor))
 
-        // Update local state immediately
-        setCurrentTransform(prev => ({ ...prev, scale: newScale }))
-
-        // Cancel previous RAF
-        if (rafRef.current !== null) {
-          cancelAnimationFrame(rafRef.current)
-        }
-
-        // Debounce parent update using RAF
-        rafRef.current = requestAnimationFrame(() => {
-          onTransformChange({ scale: newScale })
-        })
+        // Update global state immediately to affect all mockups
+        onTransformChange({ scale: newScale })
       }
       e.preventDefault()
     } else if (e.touches.length === 1 && isDragging) {
@@ -242,18 +206,8 @@ function InteractivePreview({ mockupImage, designImage, transform, onTransformCh
       const newX = dragInitial.x + (dx * mockupScaleX)
       const newY = dragInitial.y + (dy * mockupScaleY)
 
-      // Update local state immediately for smooth rendering
-      setCurrentTransform(prev => ({ ...prev, x: newX, y: newY }))
-
-      // Cancel previous RAF
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current)
-      }
-
-      // Debounce parent update using RAF
-      rafRef.current = requestAnimationFrame(() => {
-        onTransformChange({ x: newX, y: newY })
-      })
+      // Update global state immediately to affect all mockups
+      onTransformChange({ x: newX, y: newY })
 
       e.preventDefault()
     }
@@ -264,94 +218,60 @@ function InteractivePreview({ mockupImage, designImage, transform, onTransformCh
     setLastPinchDistance(null)
   }
 
-  const [isModalOpen, setIsModalOpen] = useState(false)
-
   return (
-    <>
-      <div className="bg-gray-700 rounded-lg p-4">
-        <div className="mb-2 flex justify-between items-center">
-          <label className="text-sm font-medium">Interactive Preview</label>
-          <div className="flex items-center gap-2">
-            <div className="text-xs text-gray-400">
-              X: {currentTransform.x.toFixed(0)} • Y: {currentTransform.y.toFixed(0)} • Scale: {currentTransform.scale.toFixed(2)}x
-            </div>
-            <button
-              onClick={() => setIsModalOpen(true)}
-              className="px-2 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition"
-              title="Expand preview"
-            >
-              Expand
-            </button>
+    <div className="bg-gray-700 rounded-lg p-4">
+      <div className="mb-2 flex justify-between items-center">
+        <label className="text-sm font-medium">Interactive Preview</label>
+        <div className="flex items-center gap-2">
+          <div className="text-xs text-gray-400">
+            X: {transform.x.toFixed(0)} • Y: {transform.y.toFixed(0)} • Scale: {transform.scale.toFixed(2)}x • ScaleX: {transform.scaleX.toFixed(2)} • ScaleY: {transform.scaleY.toFixed(2)}
           </div>
         </div>
-        <div className="relative bg-gray-800 rounded overflow-hidden" style={{ touchAction: 'none' }}>
-          <canvas
-            ref={canvasRef}
-            className="w-full h-auto cursor-move"
-            style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
-            onWheel={handleWheel}
-            onTouchStart={handleTouchStart}
-            onTouchMove={handleTouchMove}
-            onTouchEnd={handleTouchEnd}
-          />
-        </div>
-        <p className="text-xs text-gray-400 mt-2">
-          Drag to move • Scroll or pinch to scale
-        </p>
       </div>
-
-      {/* Expanded Modal Preview */}
-      {isModalOpen && (
-        <ExpandedPreviewModal
-          mockupImage={mockupImage}
-          designImage={designImage}
-          transform={currentTransform}
-          onTransformChange={(updates) => {
-            setCurrentTransform(prev => ({ ...prev, ...updates }))
-            if (rafRef.current !== null) {
-              cancelAnimationFrame(rafRef.current)
-            }
-            rafRef.current = requestAnimationFrame(() => {
-              onTransformChange(updates)
-            })
-          }}
-          onApplyGlobally={onApplyGlobally}
-          onClose={() => setIsModalOpen(false)}
+      <div className="relative bg-gray-800 rounded overflow-hidden" style={{ touchAction: 'none' }}>
+        <canvas
+          ref={canvasRef}
+          className="w-full h-auto cursor-move"
+          style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+          onWheel={handleWheel}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
         />
-      )}
-    </>
+      </div>
+      <p className="text-xs text-gray-400 mt-2">
+        Drag to move • Scroll or pinch to scale
+      </p>
+    </div>
   )
 }
 
-// Expanded Modal Preview Component
-interface ExpandedPreviewModalProps {
+// Edit Modal Component (standalone, triggered by Edit button)
+interface EditModalProps {
   mockupImage: HTMLImageElement | null
   designImage: HTMLImageElement | null
   transform: Transform
   onTransformChange: (updates: Partial<Transform>) => void
-  onApplyGlobally?: (transform: Transform) => void
   onClose: () => void
 }
 
-function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransformChange, onApplyGlobally, onClose }: ExpandedPreviewModalProps) {
+function EditModal({ mockupImage, designImage, transform, onTransformChange, onClose }: EditModalProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
   const [dragInitial, setDragInitial] = useState({ x: 0, y: 0 })
-  const rafRef = useRef<number | null>(null)
-  const [currentTransform, setCurrentTransform] = useState(transform)
+  // Local state: clone transform on open, only commit on Apply
+  const [localTransform, setLocalTransform] = useState<Transform>(() => ({ ...transform }))
   const [lastPinchDistance, setLastPinchDistance] = useState<number | null>(null)
   const [pinchInitialScale, setPinchInitialScale] = useState(1)
   const [scaleAnchor, setScaleAnchor] = useState<{ x: number; y: number } | null>(null)
-
-  // Update current transform when prop changes (two-way sync)
-  useEffect(() => {
-    setCurrentTransform(transform)
-  }, [transform])
+  const [isDraggingHandle, setIsDraggingHandle] = useState<'left' | 'right' | 'top' | 'bottom' | null>(null)
+  const [handleDragStart, setHandleDragStart] = useState({ x: 0, y: 0 })
+  const [handleInitialScale, setHandleInitialScale] = useState({ scaleX: 1, scaleY: 1 })
 
   // Block body scroll when modal is open
   useEffect(() => {
@@ -361,10 +281,18 @@ function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransform
     }
   }, [])
 
-  // Handle keyboard shortcuts (Escape and arrow keys)
+  // Handle keyboard shortcuts (Escape, Enter, and arrow keys)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        onClose()
+        return
+      }
+
+      // Enter or Ctrl+Enter to Apply
+      if (e.key === 'Enter' || (e.ctrlKey && e.key === 'Enter')) {
+        e.preventDefault()
+        onTransformChange(localTransform)
         onClose()
         return
       }
@@ -394,26 +322,16 @@ function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransform
             break
         }
 
-        const newX = currentTransform.x + dx
-        const newY = currentTransform.y + dy
+        const newX = localTransform.x + dx
+        const newY = localTransform.y + dy
 
         // Update local state immediately
-        setCurrentTransform(prev => ({ ...prev, x: newX, y: newY }))
-
-        // Cancel previous RAF
-        if (rafRef.current !== null) {
-          cancelAnimationFrame(rafRef.current)
-        }
-
-        // Debounce parent update using RAF
-        rafRef.current = requestAnimationFrame(() => {
-          onTransformChange({ x: newX, y: newY })
-        })
+        setLocalTransform(prev => ({ ...prev, x: newX, y: newY }))
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onClose, currentTransform, mockupImage, onTransformChange])
+  }, [onClose, onTransformChange, localTransform, mockupImage])
 
   // Draw preview
   useEffect(() => {
@@ -450,10 +368,10 @@ function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransform
     // Draw design if available
     if (designImage) {
       ctx.save()
-      ctx.globalAlpha = currentTransform.opacity / 100
-      ctx.translate(currentTransform.x * scaleX, currentTransform.y * scaleY)
-      ctx.rotate((currentTransform.rotation * Math.PI) / 180)
-      ctx.scale(currentTransform.scale * scaleX, currentTransform.scale * scaleY)
+      ctx.globalAlpha = localTransform.opacity / 100
+      ctx.translate(localTransform.x * scaleX, localTransform.y * scaleY)
+      ctx.rotate((localTransform.rotation * Math.PI) / 180)
+      ctx.scale(localTransform.scale * localTransform.scaleX * scaleX, localTransform.scale * localTransform.scaleY * scaleY)
       ctx.drawImage(
         designImage,
         -designImage.width / 2,
@@ -461,7 +379,7 @@ function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransform
       )
       ctx.restore()
     }
-  }, [mockupImage, designImage, currentTransform])
+  }, [mockupImage, designImage, localTransform])
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!mockupImage || !designImage) return
@@ -477,7 +395,7 @@ function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransform
 
     setIsDragging(true)
     setDragStart({ x: mouseX, y: mouseY })
-    setDragInitial({ x: currentTransform.x, y: currentTransform.y })
+    setDragInitial({ x: localTransform.x, y: localTransform.y })
 
     // Set scale anchor for Alt+scroll
     if (e.altKey) {
@@ -520,17 +438,7 @@ function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransform
     const newY = dragInitial.y + (dy * mockupScaleY)
 
     // Update local state immediately for smooth rendering
-    setCurrentTransform(prev => ({ ...prev, x: newX, y: newY }))
-
-    // Cancel previous RAF
-    if (rafRef.current !== null) {
-      cancelAnimationFrame(rafRef.current)
-    }
-
-    // Debounce parent update using RAF
-    rafRef.current = requestAnimationFrame(() => {
-      onTransformChange({ x: newX, y: newY })
-    })
+    setLocalTransform(prev => ({ ...prev, x: newX, y: newY }))
   }
 
   const handleMouseUp = () => {
@@ -548,10 +456,10 @@ function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransform
 
     // Determine scroll direction and amount
     const delta = -e.deltaY * 0.001
-    let newScale = Math.max(0.05, Math.min(3, currentTransform.scale + delta))
+    let newScale = Math.max(0.05, Math.min(3, localTransform.scale + delta))
 
-    let newX = currentTransform.x
-    let newY = currentTransform.y
+    let newX = localTransform.x
+    let newY = localTransform.y
 
     // Alt key: scale from center
     if (e.altKey || scaleAnchor) {
@@ -569,26 +477,16 @@ function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransform
       const mockupAnchorY = anchorY * mockupScaleY
 
       // Calculate offset needed to keep anchor point fixed
-      const scaleDiff = newScale - currentTransform.scale
-      const offsetX = (mockupAnchorX - currentTransform.x) * (scaleDiff / currentTransform.scale)
-      const offsetY = (mockupAnchorY - currentTransform.y) * (scaleDiff / currentTransform.scale)
+      const scaleDiff = newScale - localTransform.scale
+      const offsetX = (mockupAnchorX - localTransform.x) * (scaleDiff / localTransform.scale)
+      const offsetY = (mockupAnchorY - localTransform.y) * (scaleDiff / localTransform.scale)
 
-      newX = currentTransform.x - offsetX
-      newY = currentTransform.y - offsetY
+      newX = localTransform.x - offsetX
+      newY = localTransform.y - offsetY
     }
 
-    // Update local state immediately
-    setCurrentTransform(prev => ({ ...prev, scale: newScale, x: newX, y: newY }))
-
-    // Cancel previous RAF
-    if (rafRef.current !== null) {
-      cancelAnimationFrame(rafRef.current)
-    }
-
-    // Debounce parent update using RAF
-    rafRef.current = requestAnimationFrame(() => {
-      onTransformChange({ scale: newScale, x: newX, y: newY })
-    })
+    // Update local state immediately (keep scaleX and scaleY at 1.0 for uniform scaling)
+    setLocalTransform(prev => ({ ...prev, scale: newScale, scaleX: 1.0, scaleY: 1.0, x: newX, y: newY }))
   }
 
   // Touch handlers for pinch-to-zoom
@@ -605,7 +503,7 @@ function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransform
       const distance = getTouchDistance(e.touches)
       if (distance) {
         setLastPinchDistance(distance)
-        setPinchInitialScale(currentTransform.scale)
+        setPinchInitialScale(localTransform.scale)
       }
       e.preventDefault()
     } else if (e.touches.length === 1) {
@@ -623,7 +521,7 @@ function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransform
 
       setIsDragging(true)
       setDragStart({ x: touchX, y: touchY })
-      setDragInitial({ x: currentTransform.x, y: currentTransform.y })
+      setDragInitial({ x: localTransform.x, y: localTransform.y })
     }
   }
 
@@ -636,17 +534,7 @@ function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransform
         const newScale = Math.max(0.05, Math.min(3, pinchInitialScale * scaleFactor))
 
         // Update local state immediately
-        setCurrentTransform(prev => ({ ...prev, scale: newScale }))
-
-        // Cancel previous RAF
-        if (rafRef.current !== null) {
-          cancelAnimationFrame(rafRef.current)
-        }
-
-        // Debounce parent update using RAF
-        rafRef.current = requestAnimationFrame(() => {
-          onTransformChange({ scale: newScale })
-        })
+        setLocalTransform(prev => ({ ...prev, scale: newScale }))
       }
       e.preventDefault()
     } else if (e.touches.length === 1 && isDragging) {
@@ -674,17 +562,7 @@ function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransform
       const newY = dragInitial.y + (dy * mockupScaleY)
 
       // Update local state immediately for smooth rendering
-      setCurrentTransform(prev => ({ ...prev, x: newX, y: newY }))
-
-      // Cancel previous RAF
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current)
-      }
-
-      // Debounce parent update using RAF
-      rafRef.current = requestAnimationFrame(() => {
-        onTransformChange({ x: newX, y: newY })
-      })
+      setLocalTransform(prev => ({ ...prev, x: newX, y: newY }))
 
       e.preventDefault()
     }
@@ -694,6 +572,61 @@ function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransform
     setIsDragging(false)
     setLastPinchDistance(null)
   }
+
+  // Handle stretch handle dragging
+  const handleStretchMouseDown = (e: React.MouseEvent, handle: 'left' | 'right' | 'top' | 'bottom') => {
+    e.stopPropagation()
+    e.preventDefault()
+    setIsDraggingHandle(handle)
+    setHandleDragStart({ x: e.clientX, y: e.clientY })
+    setHandleInitialScale({ scaleX: localTransform.scaleX, scaleY: localTransform.scaleY })
+  }
+
+  // Add global mouse move and up handlers for stretch handles
+  useEffect(() => {
+    if (!isDraggingHandle) return
+
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      if (!isDraggingHandle || !designImage) return
+
+      const dx = e.clientX - handleDragStart.x
+      const dy = e.clientY - handleDragStart.y
+
+      const sensitivity = 0.003
+
+      let newScaleX = handleInitialScale.scaleX
+      let newScaleY = handleInitialScale.scaleY
+
+      const horizontalOnly = e.ctrlKey || e.metaKey
+      const verticalOnly = e.shiftKey
+
+      if (isDraggingHandle === 'left' || isDraggingHandle === 'right') {
+        const direction = isDraggingHandle === 'right' ? 1 : -1
+        if (!verticalOnly) {
+          newScaleX = Math.max(0.1, Math.min(3, handleInitialScale.scaleX + dx * direction * sensitivity))
+        }
+      } else {
+        const direction = isDraggingHandle === 'bottom' ? 1 : -1
+        if (!horizontalOnly) {
+          newScaleY = Math.max(0.1, Math.min(3, handleInitialScale.scaleY + dy * direction * sensitivity))
+        }
+      }
+
+      setLocalTransform(prev => ({ ...prev, scaleX: newScaleX, scaleY: newScaleY }))
+    }
+
+    const handleGlobalMouseUp = () => {
+      setIsDraggingHandle(null)
+    }
+
+    window.addEventListener('mousemove', handleGlobalMouseMove)
+    window.addEventListener('mouseup', handleGlobalMouseUp)
+
+    return () => {
+      window.removeEventListener('mousemove', handleGlobalMouseMove)
+      window.removeEventListener('mouseup', handleGlobalMouseUp)
+    }
+  }, [isDraggingHandle, handleDragStart, handleInitialScale, designImage, onTransformChange])
 
   return createPortal(
     <div
@@ -705,37 +638,36 @@ function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransform
         className="relative max-w-full max-h-full flex flex-col items-center"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header with controls and close button */}
+        {/* Header with live readouts and buttons */}
         <div className="mb-4 flex items-center gap-4 bg-gray-800 px-6 py-3 rounded-lg">
           <div className="text-sm text-gray-300">
-            X: {currentTransform.x.toFixed(0)} • Y: {currentTransform.y.toFixed(0)} • Scale: {currentTransform.scale.toFixed(2)}x
+            X: {localTransform.x.toFixed(0)} • Y: {localTransform.y.toFixed(0)} • Scale: {localTransform.scale.toFixed(2)}x • ScaleX: {localTransform.scaleX.toFixed(2)} • ScaleY: {localTransform.scaleY.toFixed(2)}
           </div>
-          {onApplyGlobally && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                onApplyGlobally(currentTransform)
-              }}
-              className="px-3 py-1 text-sm bg-green-600 hover:bg-green-700 text-white rounded transition"
-              title="Apply these transform settings to all mockups"
-            >
-              Apply Globally
-            </button>
-          )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onTransformChange(localTransform)
+              onClose()
+            }}
+            className="ml-auto px-4 py-1 text-sm bg-green-600 hover:bg-green-700 text-white rounded transition"
+            title="Apply changes (Enter)"
+          >
+            Apply
+          </button>
           <button
             onClick={(e) => {
               e.stopPropagation()
               onClose()
             }}
-            className="ml-auto px-3 py-1 text-sm bg-red-600 hover:bg-red-700 text-white rounded transition"
+            className="px-3 py-1 text-sm bg-red-600 hover:bg-red-700 text-white rounded transition"
             title="Close (Esc)"
           >
             × Close
           </button>
         </div>
 
-        {/* Canvas */}
-        <div className="relative bg-gray-900 rounded-lg overflow-hidden shadow-2xl" style={{ touchAction: 'none' }}>
+        {/* Canvas with Stretch Handles */}
+        <div className="relative bg-gray-900 rounded-lg overflow-visible shadow-2xl" style={{ touchAction: 'none' }}>
           <canvas
             ref={canvasRef}
             className="max-w-full max-h-full cursor-move"
@@ -749,11 +681,67 @@ function ExpandedPreviewModal({ mockupImage, designImage, transform, onTransform
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
           />
+
+          {/* Stretch Handles Overlay */}
+          {designImage && (
+            <>
+              {/* Left Handle */}
+              <div
+                className="absolute w-3 h-12 bg-blue-500 hover:bg-blue-400 rounded cursor-ew-resize"
+                style={{
+                  left: '-6px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                }}
+                onMouseDown={(e) => handleStretchMouseDown(e, 'left')}
+                title="Drag to stretch horizontally (Shift = vertical only)"
+              />
+
+              {/* Right Handle */}
+              <div
+                className="absolute w-3 h-12 bg-blue-500 hover:bg-blue-400 rounded cursor-ew-resize"
+                style={{
+                  right: '-6px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                }}
+                onMouseDown={(e) => handleStretchMouseDown(e, 'right')}
+                title="Drag to stretch horizontally (Shift = vertical only)"
+              />
+
+              {/* Top Handle */}
+              <div
+                className="absolute w-12 h-3 bg-green-500 hover:bg-green-400 rounded cursor-ns-resize"
+                style={{
+                  top: '-6px',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                }}
+                onMouseDown={(e) => handleStretchMouseDown(e, 'top')}
+                title="Drag to stretch vertically (Ctrl = horizontal only)"
+              />
+
+              {/* Bottom Handle */}
+              <div
+                className="absolute w-12 h-3 bg-green-500 hover:bg-green-400 rounded cursor-ns-resize"
+                style={{
+                  bottom: '-6px',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                }}
+                onMouseDown={(e) => handleStretchMouseDown(e, 'bottom')}
+                title="Drag to stretch vertically (Ctrl = horizontal only)"
+              />
+            </>
+          )}
         </div>
 
         {/* Instructions */}
         <p className="mt-4 text-xs text-gray-400 text-center">
-          Drag to move • Scroll to scale • Arrows = nudge • Shift = lock axis • Alt = scale from center • Esc to close
+          Drag to move • Scroll to scale • Blue handles = horizontal stretch • Green handles = vertical stretch
+        </p>
+        <p className="text-xs text-gray-400 text-center">
+          Arrows = nudge • Shift = lock axis • Alt = scale from center • Ctrl/Shift on handles = constrain • Esc to close
         </p>
       </div>
     </div>,
@@ -794,7 +782,7 @@ function MockupCanvas() {
   // Design state
   const [design1, setDesign1] = useState<DesignState>({
     image: null,
-    transform: { x: 0, y: 0, scale: 1.0, rotation: 0, opacity: 100 },
+    transform: { x: 0, y: 0, scale: 1.0, scaleX: 1.0, scaleY: 1.0, rotation: 0, opacity: 100 },
     blendMode: 'multiply',
     visible: true,
     order: 0,
@@ -809,6 +797,10 @@ function MockupCanvas() {
 
   // Edit mode state
   const [editMode, setEditMode] = useState<{ active: boolean; mockupIndex: number | null }>({ active: false, mockupIndex: null })
+
+  // Edit modal state (standalone modal, separate from edit mode)
+  const [editModalOpen, setEditModalOpen] = useState(false)
+  const [editModalMockupIndex, setEditModalMockupIndex] = useState<number | null>(null)
 
   // Canvas refresh counter to force re-render of preview tiles
   const [canvasRefreshKey, setCanvasRefreshKey] = useState(0)
@@ -904,6 +896,8 @@ function MockupCanvas() {
                 x: mockupImage.width / 2,
                 y: mockupImage.height / 2,
                 scale: Math.max(0.1, Math.min(1.5, autoScale)), // Clamp between 0.1 and 1.5
+                scaleX: 1.0,
+                scaleY: 1.0,
               }
             }))
           } else {
@@ -954,7 +948,7 @@ function MockupCanvas() {
     ctx.globalAlpha = transform.opacity / 100
     ctx.translate(pos.x, pos.y)
     ctx.rotate((transform.rotation * Math.PI) / 180)
-    ctx.scale(transform.scale, transform.scale)
+    ctx.scale(transform.scale * transform.scaleX, transform.scale * transform.scaleY)
     ctx.drawImage(
       design1.image,
       -design1.image.width / 2,
@@ -1079,8 +1073,8 @@ function MockupCanvas() {
     const transform = getEffectiveTransform(mockupIndex)
 
     // Simple bounding box hit test (ignoring rotation for simplicity)
-    const halfWidth = (design1.image.width * transform.scale) / 2
-    const halfHeight = (design1.image.height * transform.scale) / 2
+    const halfWidth = (design1.image.width * transform.scale * transform.scaleX) / 2
+    const halfHeight = (design1.image.height * transform.scale * transform.scaleY) / 2
 
     return (
       mouseX >= pos.x - halfWidth &&
@@ -1247,22 +1241,6 @@ function MockupCanvas() {
     }
   }
 
-  // Apply transform globally to all mockups
-  const applyTransformGlobally = (transform: Transform) => {
-    // Update the global design transform
-    setDesign1(prev => ({
-      ...prev,
-      transform: transform
-    }))
-
-    // Clear all custom transforms and offsets so all mockups use the new global settings
-    setMockupCustomTransforms1(new Map())
-    setMockupOffsets(new Map())
-
-    // Force canvas refresh
-    setCanvasRefreshKey(prev => prev + 1)
-  }
-
   // Export all mockups as ZIP
   const handleExport = async () => {
     if (mockupImages.length === 0) return
@@ -1386,7 +1364,6 @@ function MockupCanvas() {
                   designImage={getActiveDesignState().image}
                   transform={getActiveEffectiveTransform()}
                   onTransformChange={updateActiveDesignTransform}
-                  onApplyGlobally={applyTransformGlobally}
                 />
 
                 <div>
@@ -1602,7 +1579,7 @@ function MockupCanvas() {
                   ctx.globalAlpha = transform.opacity / 100
                   ctx.translate(pos.x * scaleX, pos.y * scaleY)
                   ctx.rotate((transform.rotation * Math.PI) / 180)
-                  ctx.scale(transform.scale * scaleX, transform.scale * scaleY)
+                  ctx.scale(transform.scale * transform.scaleX * scaleX, transform.scale * transform.scaleY * scaleY)
                   ctx.drawImage(
                     design1.image,
                     -design1.image.width / 2,
@@ -1679,16 +1656,13 @@ function MockupCanvas() {
                           <button
                             onClick={(e) => {
                               e.stopPropagation()
-                              setEditMode({ active: true, mockupIndex: index })
+                              setEditModalMockupIndex(index)
+                              setEditModalOpen(true)
                               setSelectedMockupIndex(index)
                             }}
-                            className={`flex-1 text-xs py-2 rounded transition ${
-                              editMode.active && editMode.mockupIndex === index
-                                ? 'bg-blue-600 text-white font-semibold'
-                                : 'bg-gray-600 hover:bg-gray-500 text-white'
-                            }`}
+                            className="flex-1 text-xs py-2 rounded transition bg-gray-600 hover:bg-gray-500 text-white"
                           >
-                            {editMode.active && editMode.mockupIndex === index ? '✏️ Editing...' : '✏️ Edit'}
+                            ✏️ Edit
                           </button>
                         )}
                         <button
@@ -1745,6 +1719,29 @@ function MockupCanvas() {
           onMouseLeave={handleCanvasMouseUp}
         />
       </div>
+
+      {/* Edit Modal - Standalone popup triggered by Edit button */}
+      {editModalOpen && editModalMockupIndex !== null && (
+        <EditModal
+          mockupImage={mockupImages[editModalMockupIndex]}
+          designImage={design1.image}
+          transform={getEffectiveTransform(editModalMockupIndex)}
+          onTransformChange={(updates) => {
+            const idx = editModalMockupIndex
+            setMockupCustomTransforms1(prev => {
+              const newMap = new Map(prev)
+              const currentTransform = getEffectiveTransform(idx)
+              newMap.set(idx, { ...currentTransform, ...updates })
+              return newMap
+            })
+            setCanvasRefreshKey(prev => prev + 1)
+          }}
+          onClose={() => {
+            setEditModalOpen(false)
+            setEditModalMockupIndex(null)
+          }}
+        />
+      )}
     </div>
   )
 }
