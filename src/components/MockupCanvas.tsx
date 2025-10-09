@@ -352,6 +352,112 @@ function MockupCanvas() {
     }
   }
 
+  // Delete mockup image
+  const deleteMockup = (index: number) => {
+    // Remove from mockup images array
+    setMockupImages(prev => prev.filter((_, i) => i !== index))
+
+    // Clean up custom transforms for this mockup
+    setMockupCustomTransforms1(prev => {
+      const newMap = new Map(prev)
+      newMap.delete(index)
+      // Re-index remaining items
+      const reindexed = new Map<number, Transform>()
+      Array.from(newMap.entries()).forEach(([idx, transform]) => {
+        if (idx > index) {
+          reindexed.set(idx - 1, transform)
+        } else {
+          reindexed.set(idx, transform)
+        }
+      })
+      return reindexed
+    })
+
+    setMockupCustomTransforms2(prev => {
+      const newMap = new Map(prev)
+      newMap.delete(index)
+      const reindexed = new Map<number, Transform>()
+      Array.from(newMap.entries()).forEach(([idx, transform]) => {
+        if (idx > index) {
+          reindexed.set(idx - 1, transform)
+        } else {
+          reindexed.set(idx, transform)
+        }
+      })
+      return reindexed
+    })
+
+    setMockupCustomBlendModes1(prev => {
+      const newMap = new Map(prev)
+      newMap.delete(index)
+      const reindexed = new Map<number, BlendMode>()
+      Array.from(newMap.entries()).forEach(([idx, blendMode]) => {
+        if (idx > index) {
+          reindexed.set(idx - 1, blendMode)
+        } else {
+          reindexed.set(idx, blendMode)
+        }
+      })
+      return reindexed
+    })
+
+    setMockupCustomBlendModes2(prev => {
+      const newMap = new Map(prev)
+      newMap.delete(index)
+      const reindexed = new Map<number, BlendMode>()
+      Array.from(newMap.entries()).forEach(([idx, blendMode]) => {
+        if (idx > index) {
+          reindexed.set(idx - 1, blendMode)
+        } else {
+          reindexed.set(idx, blendMode)
+        }
+      })
+      return reindexed
+    })
+
+    setMockupOffsets(prev => {
+      const newMap = new Map(prev)
+      newMap.delete(index)
+      const reindexed = new Map<number, { design1?: { x: number; y: number }; design2?: { x: number; y: number } }>()
+      Array.from(newMap.entries()).forEach(([idx, offset]) => {
+        if (idx > index) {
+          reindexed.set(idx - 1, offset)
+        } else {
+          reindexed.set(idx, offset)
+        }
+      })
+      return reindexed
+    })
+
+    setMockupTextOverrides(prev => {
+      const newMap = new Map(prev)
+      newMap.delete(index)
+      const reindexed = new Map<number, Map<string, Partial<TextLayer>>>()
+      Array.from(newMap.entries()).forEach(([idx, overrides]) => {
+        if (idx > index) {
+          reindexed.set(idx - 1, overrides)
+        } else {
+          reindexed.set(idx, overrides)
+        }
+      })
+      return reindexed
+    })
+
+    // Update selected index
+    if (selectedMockupIndex >= index && selectedMockupIndex > 0) {
+      setSelectedMockupIndex(prev => Math.max(0, prev - 1))
+    }
+
+    // Exit edit mode if editing this mockup
+    if (editMode.active && editMode.mockupIndex === index) {
+      setEditMode({ active: false, mockupIndex: null })
+    } else if (editMode.active && editMode.mockupIndex !== null && editMode.mockupIndex > index) {
+      setEditMode(prev => ({ ...prev, mockupIndex: prev.mockupIndex! - 1 }))
+    }
+
+    setCanvasRefreshKey(prev => prev + 1)
+  }
+
   // Render canvas
   useEffect(() => {
     const canvas = canvasRef.current
@@ -892,22 +998,36 @@ function MockupCanvas() {
                           )}
                         </div>
                       )}
-                      {(design1.image || design2.image) && (
+                      <div className="flex gap-2">
+                        {(design1.image || design2.image) && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setEditMode({ active: true, mockupIndex: index })
+                              setSelectedMockupIndex(index)
+                            }}
+                            className={`flex-1 text-xs py-2 rounded transition ${
+                              editMode.active && editMode.mockupIndex === index
+                                ? 'bg-blue-600 text-white font-semibold'
+                                : 'bg-gray-600 hover:bg-gray-500 text-white'
+                            }`}
+                          >
+                            {editMode.active && editMode.mockupIndex === index ? '✏️ Editing...' : '✏️ Edit'}
+                          </button>
+                        )}
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
-                            setEditMode({ active: true, mockupIndex: index })
-                            setSelectedMockupIndex(index)
+                            if (confirm(`Delete Mockup ${index + 1}?`)) {
+                              deleteMockup(index)
+                            }
                           }}
-                          className={`w-full text-xs py-2 rounded transition ${
-                            editMode.active && editMode.mockupIndex === index
-                              ? 'bg-blue-600 text-white font-semibold'
-                              : 'bg-gray-600 hover:bg-gray-500 text-white'
-                          }`}
+                          className="px-3 text-xs py-2 rounded transition bg-red-600 hover:bg-red-700 text-white"
+                          title="Delete mockup"
                         >
-                          {editMode.active && editMode.mockupIndex === index ? '✏️ Editing...' : '✏️ Edit'}
+                          🗑️
                         </button>
-                      )}
+                      </div>
                     </div>
                   </div>
                 )
