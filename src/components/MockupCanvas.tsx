@@ -358,20 +358,33 @@ function InteractivePreview({
 // Edit Modal Component (standalone, triggered by Edit button)
 interface EditModalProps {
   mockupImage: HTMLImageElement | null
-  designImage: HTMLImageElement | null
-  transform: Transform
-  onTransformChange: (updates: Partial<Transform>) => void
+  design1Image: HTMLImageElement | null
+  design2Image: HTMLImageElement | null
+  design1Transform: Transform
+  design2Transform: Transform
+  onDesign1TransformChange: (transform: Transform) => void
+  onDesign2TransformChange: (transform: Transform) => void
   onClose: () => void
 }
 
-function EditModal({ mockupImage, designImage, transform, onTransformChange, onClose }: EditModalProps) {
+function EditModal({ mockupImage, design1Image, design2Image, design1Transform, design2Transform, onDesign1TransformChange, onDesign2TransformChange, onClose }: EditModalProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
   const [dragInitial, setDragInitial] = useState({ x: 0, y: 0 })
-  const rafRef = useRef<number | null>(null)
-  // Local state: clone transform on open, only commit on Apply
-  const [localTransform, setLocalTransform] = useState<Transform>(() => ({ ...transform }))
+
+  // Active layer state
+  const [activeLayer, setActiveLayer] = useState<'design1' | 'design2'>('design1')
+
+  // Local state: clone transforms on open, only commit on Apply
+  const [localDesign1Transform, setLocalDesign1Transform] = useState<Transform>(() => ({ ...design1Transform }))
+  const [localDesign2Transform, setLocalDesign2Transform] = useState<Transform>(() => ({ ...design2Transform }))
+
+  // Get active layer's properties
+  const currentTransform = activeLayer === 'design1' ? localDesign1Transform : localDesign2Transform
+  const setCurrentTransform = activeLayer === 'design1' ? setLocalDesign1Transform : setLocalDesign2Transform
+  const currentImage = activeLayer === 'design1' ? design1Image : design2Image
+
   const [lastPinchDistance, setLastPinchDistance] = useState<number | null>(null)
   const [pinchInitialScale, setPinchInitialScale] = useState(1)
   const [scaleAnchor, setScaleAnchor] = useState<{ x: number; y: number } | null>(null)
@@ -387,49 +400,71 @@ function EditModal({ mockupImage, designImage, transform, onTransformChange, onC
     }
   }, [])
 
-  // Handle keyboard shortcuts (Escape and arrow keys)
+  // Helper function to snap rotation to cardinal angles
+  const snapRotation = (rotation: number): number => {
+    const snapAngles = [0, 90, 180, 270, 360]
+    const snapThreshold = 2
+
+    for (const angle of snapAngles) {
+      if (Math.abs(rotation - angle) <= snapThreshold) {
+        return angle % 360
+      }
+    }
+    return rotation
+  }
+
+  // Handle Apply button
+  const handleApply = () => {
+    onDesign1TransformChange(localDesign1Transform)
+    onDesign2TransformChange(localDesign2Transform)
+    onClose()
+  }
+
+  // Handle Close button (discard changes)
+  const handleClose = () => {
+    onClose()
+  }
+
+  // Handle keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Cmd/Ctrl+Enter = Apply
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault()
+        handleApply()
+        return
+      }
+
+      // Escape = Close (discard)
       if (e.key === 'Escape') {
-        onClose()
+        e.preventDefault()
+        handleClose()
         return
       }
 
       // Arrow key nudging
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
         e.preventDefault()
-
         if (!mockupImage) return
 
-        const nudgeAmount = e.shiftKey ? 10 : 1 // Shift for larger nudges
+        const nudgeAmount = e.shiftKey ? 10 : 1
         let dx = 0
         let dy = 0
 
         switch (e.key) {
-          case 'ArrowLeft':
-            dx = -nudgeAmount
-            break
-          case 'ArrowRight':
-            dx = nudgeAmount
-            break
-          case 'ArrowUp':
-            dy = -nudgeAmount
-            break
-          case 'ArrowDown':
-            dy = nudgeAmount
-            break
+          case 'ArrowLeft': dx = -nudgeAmount; break
+          case 'ArrowRight': dx = nudgeAmount; break
+          case 'ArrowUp': dy = -nudgeAmount; break
+          case 'ArrowDown': dy = nudgeAmount; break
         }
 
-        const newX = localTransform.x + dx
-        const newY = localTransform.y + dy
-
-        // Update local state immediately
-        setLocalTransform(prev => ({ ...prev, x: newX, y: newY }))
+        setCurrentTransform(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }))
       }
     }
+
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onClose, localTransform, mockupImage])
+  }, [mockupImage, currentTransform, setCurrentTransform])
 
   // Draw preview
   useEffect(() => {
@@ -463,24 +498,53 @@ function EditModal({ mockupImage, designImage, transform, onTransformChange, onC
     ctx.clearRect(0, 0, width, height)
     ctx.drawImage(mockupImage, 0, 0, width, height)
 
-    // Draw design if available
-    if (designImage) {
+    // Draw design 1 if available
+    if (design1Image) {
       ctx.save()
-      ctx.globalAlpha = localTransform.opacity / 100
-      ctx.translate(localTransform.x * scaleX, localTransform.y * scaleY)
-      ctx.rotate((localTransform.rotation * Math.PI) / 180)
-      ctx.scale(localTransform.scale * localTransform.scaleX * scaleX, localTransform.scale * localTransform.scaleY * scaleY)
+      ctx.globalAlpha = localDesign1Transform.opacity / 100
+      ctx.translate(localDesign1Transform.x * scaleX, localDesign1Transform.y * scaleY)
+      ctx.rotate((localDesign1Transform.rotation * Math.PI) / 180)
+      ctx.scale(localDesign1Transform.scale * localDesign1Transform.scaleX * scaleX, localDesign1Transform.scale * localDesign1Transform.scaleY * scaleY)
       ctx.drawImage(
-        designImage,
-        -designImage.width / 2,
-        -designImage.height / 2
+        design1Image,
+        -design1Image.width / 2,
+        -design1Image.height / 2
       )
       ctx.restore()
     }
-  }, [mockupImage, designImage, localTransform])
+
+    // Draw design 2 if available
+    if (design2Image) {
+      ctx.save()
+      ctx.globalAlpha = localDesign2Transform.opacity / 100
+      ctx.translate(localDesign2Transform.x * scaleX, localDesign2Transform.y * scaleY)
+      ctx.rotate((localDesign2Transform.rotation * Math.PI) / 180)
+      ctx.scale(localDesign2Transform.scale * localDesign2Transform.scaleX * scaleX, localDesign2Transform.scale * localDesign2Transform.scaleY * scaleY)
+      ctx.drawImage(
+        design2Image,
+        -design2Image.width / 2,
+        -design2Image.height / 2
+      )
+      ctx.restore()
+    }
+
+    // Draw active layer outline
+    if (currentImage) {
+      ctx.save()
+      ctx.strokeStyle = activeLayer === 'design1' ? '#10b981' : '#f97316' // green for design1, orange for design2
+      ctx.lineWidth = 3
+      ctx.setLineDash([5, 5])
+      ctx.translate(currentTransform.x * scaleX, currentTransform.y * scaleY)
+      ctx.rotate((currentTransform.rotation * Math.PI) / 180)
+      const w = currentImage.width * currentTransform.scale * currentTransform.scaleX * scaleX
+      const h = currentImage.height * currentTransform.scale * currentTransform.scaleY * scaleY
+      ctx.strokeRect(-w / 2, -h / 2, w, h)
+      ctx.restore()
+    }
+  }, [mockupImage, design1Image, design2Image, localDesign1Transform, localDesign2Transform, activeLayer, currentImage, currentTransform])
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!mockupImage || !designImage) return
+    if (!mockupImage || !currentImage) return
 
     const canvas = canvasRef.current
     if (!canvas) return
@@ -493,7 +557,7 @@ function EditModal({ mockupImage, designImage, transform, onTransformChange, onC
 
     setIsDragging(true)
     setDragStart({ x: mouseX, y: mouseY })
-    setDragInitial({ x: localTransform.x, y: localTransform.y })
+    setDragInitial({ x: currentTransform.x, y: currentTransform.y })
 
     // Set scale anchor for Alt+scroll
     if (e.altKey) {
@@ -536,7 +600,7 @@ function EditModal({ mockupImage, designImage, transform, onTransformChange, onC
     const newY = dragInitial.y + (dy * mockupScaleY)
 
     // Update local state immediately for smooth rendering
-    setLocalTransform(prev => ({ ...prev, x: newX, y: newY }))
+    setCurrentTransform(prev => ({ ...prev, x: newX, y: newY }))
   }
 
   const handleMouseUp = () => {
@@ -554,10 +618,10 @@ function EditModal({ mockupImage, designImage, transform, onTransformChange, onC
 
     // Determine scroll direction and amount
     const delta = -e.deltaY * 0.001
-    let newScale = Math.max(0.05, Math.min(3, localTransform.scale + delta))
+    let newScale = Math.max(0.05, Math.min(3, currentTransform.scale + delta))
 
-    let newX = localTransform.x
-    let newY = localTransform.y
+    let newX = currentTransform.x
+    let newY = currentTransform.y
 
     // Alt key: scale from center
     if (e.altKey || scaleAnchor) {
@@ -575,16 +639,16 @@ function EditModal({ mockupImage, designImage, transform, onTransformChange, onC
       const mockupAnchorY = anchorY * mockupScaleY
 
       // Calculate offset needed to keep anchor point fixed
-      const scaleDiff = newScale - localTransform.scale
-      const offsetX = (mockupAnchorX - localTransform.x) * (scaleDiff / localTransform.scale)
-      const offsetY = (mockupAnchorY - localTransform.y) * (scaleDiff / localTransform.scale)
+      const scaleDiff = newScale - currentTransform.scale
+      const offsetX = (mockupAnchorX - currentTransform.x) * (scaleDiff / currentTransform.scale)
+      const offsetY = (mockupAnchorY - currentTransform.y) * (scaleDiff / currentTransform.scale)
 
-      newX = localTransform.x - offsetX
-      newY = localTransform.y - offsetY
+      newX = currentTransform.x - offsetX
+      newY = currentTransform.y - offsetY
     }
 
     // Update local state immediately (keep scaleX and scaleY at 1.0 for uniform scaling)
-    setLocalTransform(prev => ({ ...prev, scale: newScale, scaleX: 1.0, scaleY: 1.0, x: newX, y: newY }))
+    setCurrentTransform(prev => ({ ...prev, scale: newScale, scaleX: 1.0, scaleY: 1.0, x: newX, y: newY }))
   }
 
   // Touch handlers for pinch-to-zoom
@@ -601,12 +665,12 @@ function EditModal({ mockupImage, designImage, transform, onTransformChange, onC
       const distance = getTouchDistance(e.touches)
       if (distance) {
         setLastPinchDistance(distance)
-        setPinchInitialScale(localTransform.scale)
+        setPinchInitialScale(currentTransform.scale)
       }
       e.preventDefault()
     } else if (e.touches.length === 1) {
       // Single touch drag
-      if (!mockupImage || !designImage) return
+      if (!mockupImage || !currentImage) return
 
       const canvas = canvasRef.current
       if (!canvas) return
@@ -619,7 +683,7 @@ function EditModal({ mockupImage, designImage, transform, onTransformChange, onC
 
       setIsDragging(true)
       setDragStart({ x: touchX, y: touchY })
-      setDragInitial({ x: localTransform.x, y: localTransform.y })
+      setDragInitial({ x: currentTransform.x, y: currentTransform.y })
     }
   }
 
@@ -632,17 +696,7 @@ function EditModal({ mockupImage, designImage, transform, onTransformChange, onC
         const newScale = Math.max(0.05, Math.min(3, pinchInitialScale * scaleFactor))
 
         // Update local state immediately
-        setLocalTransform(prev => ({ ...prev, scale: newScale }))
-
-        // Cancel previous RAF
-        if (rafRef.current !== null) {
-          cancelAnimationFrame(rafRef.current)
-        }
-
-        // Debounce parent update using RAF
-        rafRef.current = requestAnimationFrame(() => {
-          onTransformChange({ scale: newScale })
-        })
+        setCurrentTransform(prev => ({ ...prev, scale: newScale }))
       }
       e.preventDefault()
     } else if (e.touches.length === 1 && isDragging) {
@@ -670,17 +724,7 @@ function EditModal({ mockupImage, designImage, transform, onTransformChange, onC
       const newY = dragInitial.y + (dy * mockupScaleY)
 
       // Update local state immediately for smooth rendering
-      setLocalTransform(prev => ({ ...prev, x: newX, y: newY }))
-
-      // Cancel previous RAF
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current)
-      }
-
-      // Debounce parent update using RAF
-      rafRef.current = requestAnimationFrame(() => {
-        onTransformChange({ x: newX, y: newY })
-      })
+      setCurrentTransform(prev => ({ ...prev, x: newX, y: newY }))
 
       e.preventDefault()
     }
@@ -697,7 +741,7 @@ function EditModal({ mockupImage, designImage, transform, onTransformChange, onC
     e.preventDefault()
     setIsDraggingHandle(handle)
     setHandleDragStart({ x: e.clientX, y: e.clientY })
-    setHandleInitialScale({ scaleX: localTransform.scaleX, scaleY: localTransform.scaleY })
+    setHandleInitialScale({ scaleX: currentTransform.scaleX, scaleY: currentTransform.scaleY })
   }
 
   // Add global mouse move and up handlers for stretch handles
@@ -705,7 +749,7 @@ function EditModal({ mockupImage, designImage, transform, onTransformChange, onC
     if (!isDraggingHandle) return
 
     const handleGlobalMouseMove = (e: MouseEvent) => {
-      if (!isDraggingHandle || !designImage) return
+      if (!isDraggingHandle || !currentImage) return
 
       const dx = e.clientX - handleDragStart.x
       const dy = e.clientY - handleDragStart.y
@@ -730,15 +774,7 @@ function EditModal({ mockupImage, designImage, transform, onTransformChange, onC
         }
       }
 
-      setLocalTransform(prev => ({ ...prev, scaleX: newScaleX, scaleY: newScaleY }))
-
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current)
-      }
-
-      rafRef.current = requestAnimationFrame(() => {
-        onTransformChange({ scaleX: newScaleX, scaleY: newScaleY })
-      })
+      setCurrentTransform(prev => ({ ...prev, scaleX: newScaleX, scaleY: newScaleY }))
     }
 
     const handleGlobalMouseUp = () => {
@@ -752,32 +788,67 @@ function EditModal({ mockupImage, designImage, transform, onTransformChange, onC
       window.removeEventListener('mousemove', handleGlobalMouseMove)
       window.removeEventListener('mouseup', handleGlobalMouseUp)
     }
-  }, [isDraggingHandle, handleDragStart, handleInitialScale, designImage, onTransformChange])
+  }, [isDraggingHandle, handleDragStart, handleInitialScale, currentImage])
 
   return createPortal(
     <div
       className="fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center p-4"
       style={{ zIndex: 9999 }}
-      onClick={onClose}
+      onClick={handleClose}
     >
       <div
         className="relative max-w-full max-h-full flex flex-col items-center"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header with live readouts and close button */}
-        <div className="mb-4 flex items-center gap-4 bg-gray-800 px-6 py-3 rounded-lg">
-          <div className="text-sm text-gray-300">
-            X: {localTransform.x.toFixed(0)} • Y: {localTransform.y.toFixed(0)} • Scale: {localTransform.scale.toFixed(2)}x • ScaleX: {localTransform.scaleX.toFixed(2)} • ScaleY: {localTransform.scaleY.toFixed(2)}
+        {/* Header with Layer Selector, Apply and Close buttons */}
+        <div className="mb-4 flex items-center gap-4 bg-gray-800 px-6 py-3 rounded-lg w-full">
+          {/* Layer Selector Buttons */}
+          <div className="flex gap-2">
+            {design1Image && (
+              <button
+                onClick={() => setActiveLayer('design1')}
+                className={`px-3 py-2 text-sm font-medium rounded transition ${
+                  activeLayer === 'design1'
+                    ? 'bg-green-600 text-white ring-2 ring-green-400'
+                    : 'bg-gray-600 text-gray-300 hover:bg-gray-500'
+                }`}
+                title="Edit Design 1"
+              >
+                Design 1
+              </button>
+            )}
+            {design2Image && (
+              <button
+                onClick={() => setActiveLayer('design2')}
+                className={`px-3 py-2 text-sm font-medium rounded transition ${
+                  activeLayer === 'design2'
+                    ? 'bg-orange-600 text-white ring-2 ring-orange-400'
+                    : 'bg-gray-600 text-gray-300 hover:bg-gray-500'
+                }`}
+                title="Edit Design 2"
+              >
+                Design 2
+              </button>
+            )}
+          </div>
+
+          <div className="text-sm text-gray-300 flex-1">
+            X: {currentTransform.x.toFixed(0)} • Y: {currentTransform.y.toFixed(0)} • Scale: {currentTransform.scale.toFixed(2)}x •
+            Rotation: {currentTransform.rotation}°
           </div>
           <button
-            onClick={(e) => {
-              e.stopPropagation()
-              onClose()
-            }}
-            className="ml-auto px-3 py-1 text-sm bg-red-600 hover:bg-red-700 text-white rounded transition"
-            title="Close (Esc)"
+            onClick={handleApply}
+            className="px-4 py-2 text-sm bg-green-600 hover:bg-green-700 text-white font-semibold rounded transition"
+            title="Apply changes and close (Cmd/Ctrl+Enter)"
           >
-            × Close
+            Apply
+          </button>
+          <button
+            onClick={handleClose}
+            className="px-4 py-2 text-sm bg-gray-600 hover:bg-gray-700 text-white rounded transition"
+            title="Close without saving (Esc)"
+          >
+            Close
           </button>
         </div>
 
@@ -798,7 +869,7 @@ function EditModal({ mockupImage, designImage, transform, onTransformChange, onC
           />
 
           {/* Stretch Handles Overlay */}
-          {designImage && (
+          {currentImage && (
             <>
               {/* Left Handle */}
               <div
@@ -851,12 +922,58 @@ function EditModal({ mockupImage, designImage, transform, onTransformChange, onC
           )}
         </div>
 
+        {/* Rotation Control */}
+        <div className="mt-4 bg-gray-800 rounded-lg p-4 w-full max-w-md">
+          <div className="mb-3">
+            <div className="flex justify-between items-center mb-2">
+              <label className="text-sm font-medium">Rotation: {currentTransform.rotation}°</label>
+              <button
+                onClick={() => setCurrentTransform(prev => ({ ...prev, rotation: 0 }))}
+                className="px-2 py-1 text-xs bg-gray-600 hover:bg-gray-500 rounded transition"
+              >
+                Reset to 0°
+              </button>
+            </div>
+            <div className="flex gap-2 items-center">
+              <input
+                type="range"
+                min="0"
+                max="360"
+                step="1"
+                value={currentTransform.rotation}
+                onChange={(e) => {
+                  const rawValue = parseInt(e.target.value)
+                  const snappedValue = snapRotation(rawValue)
+                  setCurrentTransform(prev => ({ ...prev, rotation: snappedValue }))
+                }}
+                className="flex-1"
+              />
+              <input
+                type="number"
+                min="0"
+                max="360"
+                value={currentTransform.rotation}
+                onChange={(e) => {
+                  const rawValue = parseInt(e.target.value) || 0
+                  const clampedValue = Math.max(0, Math.min(360, rawValue))
+                  const snappedValue = snapRotation(clampedValue)
+                  setCurrentTransform(prev => ({ ...prev, rotation: snappedValue }))
+                }}
+                className="w-16 px-2 py-1 text-sm bg-gray-700 border border-gray-600 rounded"
+              />
+            </div>
+            <p className="text-xs text-gray-400 mt-1">
+              Snaps at 0°, 90°, 180°, 270° (±2°)
+            </p>
+          </div>
+        </div>
+
         {/* Instructions */}
-        <p className="mt-4 text-xs text-gray-400 text-center">
-          Drag to move • Scroll to scale • Blue handles = horizontal stretch • Green handles = vertical stretch
+        <p className="mt-4 text-xs text-gray-400 text-center max-w-md">
+          Drag to move • Scroll to scale • Arrows = nudge • Shift = lock axis
         </p>
-        <p className="text-xs text-gray-400 text-center">
-          Arrows = nudge • Shift = lock axis • Alt = scale from center • Ctrl/Shift on handles = constrain • Esc to close
+        <p className="text-xs text-gray-400 text-center max-w-md">
+          <kbd className="bg-gray-700 px-1 rounded">Cmd/Ctrl+Enter</kbd> = Apply • <kbd className="bg-gray-700 px-1 rounded">Esc</kbd> = Close
         </p>
       </div>
     </div>,
@@ -1946,16 +2063,26 @@ function MockupCanvas() {
       {editModalOpen && editModalMockupIndex !== null && (
         <EditModal
           mockupImage={mockupImages[editModalMockupIndex]}
-          designImage={design1.image}
-          transform={getEffectiveTransform(editModalMockupIndex)}
-          onTransformChange={(updates) => {
+          design1Image={design1.image}
+          design2Image={design2.image}
+          design1Transform={getEffectiveTransform(editModalMockupIndex, 1)}
+          design2Transform={getEffectiveTransform(editModalMockupIndex, 2)}
+          onDesign1TransformChange={(transform: Transform) => {
             const idx = editModalMockupIndex
             setMockupCustomTransforms1(prev => {
               const newMap = new Map(prev)
-              const currentTransform = getEffectiveTransform(idx)
-              newMap.set(idx, { ...currentTransform, ...updates })
+              newMap.set(idx, transform)
               return newMap
             })
+            setCanvasRefreshKey(prev => prev + 1)
+          }}
+          onDesign2TransformChange={(transform: Transform) => {
+            // TODO: Implement Design 2 custom transforms per mockup
+            // For now, update Design 2 global transform
+            setDesign2(prev => ({
+              ...prev,
+              transform
+            }))
             setCanvasRefreshKey(prev => prev + 1)
           }}
           onClose={() => {
