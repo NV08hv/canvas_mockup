@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import JSZip from 'jszip'
-import ImageUploader from './ImageUploader'
+import ImageUploader, { ImageFile } from './ImageUploader'
 
 interface Transform {
   x: number
@@ -1499,9 +1499,13 @@ type BlendMode = GlobalCompositeOperation
 
 function MockupCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [sellerId] = useState<number>(10) // Default sellerId
   const [mockupImages, setMockupImages] = useState<HTMLImageElement[]>([])
+  const [mockupFiles, setMockupFiles] = useState<ImageFile[]>([]) // Track file metadata with indices
+  const [deletedFileNames, setDeletedFileNames] = useState<string[]>([]) // Track files to delete on save
   const [selectedMockupIndex, setSelectedMockupIndex] = useState<number>(0)
   const [mockupImage, setMockupImage] = useState<HTMLImageElement | null>(null)
+  const [isLoadingFiles, setIsLoadingFiles] = useState(false) // Changed to false - load on button click
 
   // Design state
   const [design1, setDesign1] = useState<DesignState>({
@@ -1553,16 +1557,110 @@ function MockupCanvas() {
   const [dragInitialPos, setDragInitialPos] = useState({ x: 0, y: 0 })
   const [dragMockupIndex, setDragMockupIndex] = useState<number | null>(null)
 
+  // Load saved files for specific seller (manual trigger)
+  const loadSellerMockups = async () => {
+    setIsLoadingFiles(true)
+    try {
+      const response = await fetch(`http://localhost:3001/api/mockups/${sellerId}`)
+      if (!response.ok) {
+        console.log('No server running or no saved files')
+        alert('No mockups found for seller ' + sellerId)
+        setIsLoadingFiles(false)
+        return
+      }
+
+      const savedFiles = await response.json()
+      if (savedFiles.length === 0) {
+        console.log('No saved mockup files found for seller ' + sellerId)
+        alert('No mockups found for seller ' + sellerId)
+        setIsLoadingFiles(false)
+        return
+      }
+
+      console.log('Loading saved files for seller ' + sellerId + ':', savedFiles)
+
+      // Convert saved files to ImageFile format with full URLs
+      const loadedFiles: ImageFile[] = []
+      const loadedImages: HTMLImageElement[] = []
+
+      for (const savedFile of savedFiles) {
+        try {
+          // Load image from public folder
+          const img = new Image()
+          img.crossOrigin = 'anonymous'
+
+          await new Promise<void>((resolve, reject) => {
+            img.onload = () => resolve()
+            img.onerror = () => reject(new Error(`Failed to load ${savedFile.name}`))
+            img.src = `http://localhost:3001${savedFile.path}`
+          })
+
+          // Convert to data URL for consistency
+          const canvas = document.createElement('canvas')
+          canvas.width = img.width
+          canvas.height = img.height
+          const ctx = canvas.getContext('2d')
+          if (ctx) {
+            ctx.drawImage(img, 0, 0)
+            const dataUrl = canvas.toDataURL('image/png')
+
+            loadedFiles.push({
+              id: Math.random().toString(36).substring(2, 11),
+              url: dataUrl,
+              name: savedFile.name,
+              source: 'file',
+              index: savedFile.index,
+              isFromDatabase: true
+            })
+
+            loadedImages.push(img)
+          }
+        } catch (error) {
+          console.error(`Error loading file ${savedFile.name}:`, error)
+        }
+      }
+
+      if (loadedFiles.length > 0) {
+        setMockupFiles(loadedFiles)
+        setMockupImages(loadedImages)
+        setSelectedMockupIndex(0)
+        setMockupImage(loadedImages[0])
+        console.log(`Loaded ${loadedFiles.length} saved mockup files for seller ${sellerId}`)
+        alert(`Loaded ${loadedFiles.length} mockup(s) for seller ${sellerId}`)
+      }
+    } catch (error) {
+      console.error('Error loading saved files:', error)
+      alert('Error loading mockups: ' + (error as Error).message)
+    } finally {
+      setIsLoadingFiles(false)
+    }
+  }
+
   // Handle mockup images loaded from ImageUploader
-  const handleMockupImagesLoaded = (images: HTMLImageElement[]) => {
-    if (images.length > 0) {
-      setMockupImages(images)
+  const handleMockupImagesLoaded = (images: HTMLImageElement[], files: ImageFile[]) => {
+    // Merge with existing files (don't replace)
+    const existingFiles = [...mockupFiles]
+    const existingImages = [...mockupImages]
+
+    // Calculate next index based on existing files
+    const maxIndex = existingFiles.length > 0
+      ? Math.max(...existingFiles.map(f => f.index ?? -1))
+      : -1
+
+    // Update indices for new files
+    const updatedFiles = files.map((file, idx) => ({
+      ...file,
+      index: maxIndex + 1 + idx,
+      isFromDatabase: false
+    }))
+
+    setMockupFiles([...existingFiles, ...updatedFiles])
+    setMockupImages([...existingImages, ...images])
+
+    // If this is the first upload, select the first image
+    if (existingImages.length === 0 && images.length > 0) {
       setSelectedMockupIndex(0)
       setMockupImage(images[0])
-    } else {
-      // Clear if no images
-      setMockupImages([])
-      setMockupImage(null)
     }
   }
 
@@ -1701,8 +1799,18 @@ function MockupCanvas() {
 
   // Delete mockup image
   const deleteMockup = (index: number) => {
+    // Check if this file is from the database
+    const fileToDelete = mockupFiles[index]
+    if (fileToDelete && fileToDelete.isFromDatabase) {
+      // Add to deleted files list for batch deletion on save
+      setDeletedFileNames(prev => [...prev, fileToDelete.name])
+    }
+
     // Remove from mockup images array
     setMockupImages(prev => prev.filter((_, i) => i !== index))
+
+    // Remove from mockup files array
+    setMockupFiles(prev => prev.filter((_, i) => i !== index))
 
     // Clean up custom transforms for this mockup
     setMockupCustomTransforms1(prev => {
@@ -2013,6 +2121,90 @@ function MockupCanvas() {
     }
   }
 
+  // Save changes to local public folder (seller-specific)
+  const handleSave = async () => {
+    // Get newly uploaded files (not from database)
+    const newFiles = mockupFiles.filter(file => !file.isFromDatabase)
+
+    console.log('=== SAVE OPERATION ===')
+    console.log('Seller ID:', sellerId)
+    console.log('New files to upload:', newFiles.map(f => ({ name: f.name, index: f.index })))
+    console.log('Files to delete:', deletedFileNames)
+
+    try {
+      // 1. Upload new files to public/mockups_<sellerId> folder
+      for (const file of newFiles) {
+        if (file.file) {
+          const formData = new FormData()
+          formData.append('file', file.file)
+          formData.append('index', file.index?.toString() || '0')
+          formData.append('sellerId', sellerId.toString())
+
+          const response = await fetch('http://localhost:3001/api/mockups', {
+            method: 'POST',
+            body: formData
+          })
+
+          if (!response.ok) {
+            throw new Error(`Failed to upload ${file.name}`)
+          }
+
+          const result = await response.json()
+          console.log('Uploaded:', result)
+        } else {
+          // Handle URL-based images - convert data URL to blob
+          const response = await fetch(file.url)
+          const blob = await response.blob()
+          const uploadFile = new File([blob], file.name, { type: blob.type })
+
+          const formData = new FormData()
+          formData.append('file', uploadFile)
+          formData.append('index', file.index?.toString() || '0')
+          formData.append('sellerId', sellerId.toString())
+
+          const uploadResponse = await fetch('http://localhost:3001/api/mockups', {
+            method: 'POST',
+            body: formData
+          })
+
+          if (!uploadResponse.ok) {
+            throw new Error(`Failed to upload ${file.name}`)
+          }
+
+          const result = await uploadResponse.json()
+          console.log('Uploaded:', result)
+        }
+      }
+
+      // 2. Delete files from seller-specific folder
+      for (const fileName of deletedFileNames) {
+        const response = await fetch(`http://localhost:3001/api/mockups/${sellerId}/${fileName}`, {
+          method: 'DELETE'
+        })
+
+        if (!response.ok) {
+          throw new Error(`Failed to delete ${fileName}`)
+        }
+
+        const result = await response.json()
+        console.log('Deleted:', result)
+      }
+
+      // After successful save, update state
+      setMockupFiles(prev => prev.map(file => ({ ...file, isFromDatabase: true })))
+      setDeletedFileNames([])
+
+      alert('Changes saved successfully!\n\n' +
+            'Seller ID: ' + sellerId + '\n' +
+            'New files uploaded: ' + newFiles.length + '\n' +
+            'Files deleted: ' + deletedFileNames.length + '\n\n' +
+            'Files saved to: public/mockup_' + sellerId + '/')
+    } catch (error) {
+      console.error('Save error:', error)
+      alert('Error saving files: ' + (error as Error).message + '\n\nMake sure the server is running: npm run server')
+    }
+  }
+
   // Export all mockups as ZIP
   const handleExport = async () => {
     if (mockupImages.length === 0) return
@@ -2072,9 +2264,50 @@ function MockupCanvas() {
       <div className="lg:w-96 bg-gray-800 rounded-lg p-6 space-y-6 lg:sticky lg:top-6 lg:self-start">
         {/* File Uploads */}
         <div>
-          <h2 className="text-xl font-semibold mb-4">Upload Images</h2>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-semibold">Upload Images</h2>
+            <div className="text-sm text-gray-400">
+              Seller ID: <span className="text-blue-400 font-semibold">{sellerId}</span>
+            </div>
+          </div>
 
           <div className="space-y-4">
+            {/* Action Buttons Row */}
+            <div className="grid grid-cols-2 gap-3">
+              {/* Show Mockup Button */}
+              <button
+                onClick={loadSellerMockups}
+                disabled={isLoadingFiles}
+                className="bg-cyan-600 hover:bg-cyan-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold py-3 px-4 rounded transition text-sm"
+              >
+                {isLoadingFiles ? 'Loading...' : `Show Mockup`}
+              </button>
+
+              {/* Save Changes Button */}
+              <button
+                onClick={handleSave}
+                disabled={mockupFiles.filter(f => !f.isFromDatabase).length === 0 && deletedFileNames.length === 0}
+                className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold py-3 px-4 rounded transition text-sm"
+              >
+                Save Changes
+              </button>
+            </div>
+
+            {/* Unsaved Changes Info */}
+            {(mockupFiles.filter(f => !f.isFromDatabase).length > 0 || deletedFileNames.length > 0) && (
+              <div className="bg-gray-700 rounded-lg p-3">
+                <h4 className="text-sm font-semibold mb-2 text-yellow-400">Unsaved Changes:</h4>
+                <div className="text-xs text-gray-400 space-y-1">
+                  {mockupFiles.filter(f => !f.isFromDatabase).length > 0 && (
+                    <p>• {mockupFiles.filter(f => !f.isFromDatabase).length} new file(s) to upload</p>
+                  )}
+                  {deletedFileNames.length > 0 && (
+                    <p>• {deletedFileNames.length} file(s) to delete</p>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Mockup Image Uploader */}
             <ImageUploader
               onImagesLoaded={handleMockupImagesLoaded}
@@ -2282,11 +2515,12 @@ function MockupCanvas() {
             <div>
               <h2 className="text-xl font-semibold mb-4">Export</h2>
               <div className="space-y-3">
+                {/* Export Button */}
                 <button
                   onClick={handleExport}
                   className="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-6 rounded transition"
                 >
-                  Download
+                  Download ZIP
                 </button>
 
                 <div className="bg-gray-700 rounded-lg p-3">

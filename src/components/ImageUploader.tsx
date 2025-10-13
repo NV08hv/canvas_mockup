@@ -1,24 +1,33 @@
 import { useState, useRef } from 'react'
 
-interface ImageFile {
+export interface ImageFile {
   id: string
   url: string
   name: string
   source: 'file' | 'folder' | 'url'
   file?: File
+  index?: number // Track the index for database synchronization
+  isFromDatabase?: boolean // Track if this file came from the database
 }
 
 interface ImageUploaderProps {
-  onImagesLoaded: (images: HTMLImageElement[]) => void
+  onImagesLoaded: (images: HTMLImageElement[], files: ImageFile[]) => void
   accept?: string
   label?: string
+  initialFiles?: ImageFile[] // Support pre-loading files from database
 }
 
-function ImageUploader({ onImagesLoaded, accept = 'image/*', label = 'Upload Images' }: ImageUploaderProps) {
-  const [imageFiles, setImageFiles] = useState<ImageFile[]>([])
+function ImageUploader({ onImagesLoaded, accept = 'image/*', label = 'Upload Images', initialFiles = [] }: ImageUploaderProps) {
+  const [imageFiles, setImageFiles] = useState<ImageFile[]>(initialFiles)
   const [urlInput, setUrlInput] = useState('')
   const [isLoadingUrl, setIsLoadingUrl] = useState(false)
   const [urlError, setUrlError] = useState('')
+  const [nextIndex, setNextIndex] = useState<number>(() => {
+    // Calculate next index based on initial files
+    if (initialFiles.length === 0) return 0
+    const maxIndex = Math.max(...initialFiles.map(f => f.index ?? -1))
+    return maxIndex + 1
+  })
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
@@ -42,6 +51,7 @@ function ImageUploader({ onImagesLoaded, accept = 'image/*', label = 'Upload Ima
     const fileArray = Array.from(files).filter(file => file.type.startsWith('image/'))
 
     const newImageFiles: ImageFile[] = []
+    let currentIndex = nextIndex
 
     for (const file of fileArray) {
       const reader = new FileReader()
@@ -55,7 +65,10 @@ function ImageUploader({ onImagesLoaded, accept = 'image/*', label = 'Upload Ima
             name: file.name,
             source,
             file,
+            index: currentIndex,
+            isFromDatabase: false,
           })
+          currentIndex++
           resolve()
         }
         reader.onerror = () => resolve()
@@ -63,10 +76,14 @@ function ImageUploader({ onImagesLoaded, accept = 'image/*', label = 'Upload Ima
       })
     }
 
-    setImageFiles(prev => [...prev, ...newImageFiles])
+    // Update next index for future uploads
+    setNextIndex(currentIndex)
+
+    const updatedFiles = [...imageFiles, ...newImageFiles]
+    setImageFiles(updatedFiles)
 
     // Load all images and notify parent
-    await updateParentImages([...imageFiles, ...newImageFiles])
+    await updateParentImages(updatedFiles)
   }
 
   // Update parent component with loaded images
@@ -82,7 +99,7 @@ function ImageUploader({ onImagesLoaded, accept = 'image/*', label = 'Upload Ima
       }
     }
 
-    onImagesLoaded(loadedImages)
+    onImagesLoaded(loadedImages, files)
   }
 
   // Handle file upload
@@ -137,7 +154,11 @@ function ImageUploader({ onImagesLoaded, accept = 'image/*', label = 'Upload Ima
           url: dataUrl,
           name: urlInput.split('/').pop() || 'url-image.png',
           source: 'url',
+          index: nextIndex,
+          isFromDatabase: false,
         }
+
+        setNextIndex(nextIndex + 1)
 
         const updatedFiles = [...imageFiles, newImageFile]
         setImageFiles(updatedFiles)
