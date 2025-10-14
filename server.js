@@ -337,6 +337,24 @@ app.delete('/api/files/:sellerId/:sessionId/:filename', (req, res) => {
   }
 })
 
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  try {
+    res.status(200).json({ 
+      status: 'healthy', 
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      sessions: sessions.size
+    })
+  } catch (error) {
+    console.error('Health check error:', error)
+    res.status(500).json({ 
+      status: 'unhealthy', 
+      error: 'Health check failed' 
+    })
+  }
+})
+
 // Serve files from tmp directory
 app.use('/tmp', express.static(TMP_DIR))
 

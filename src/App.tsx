@@ -61,7 +61,7 @@ function App() {
     <div className="min-h-screen bg-gray-900 text-white">
       <header className="bg-gray-800 shadow-lg">
         <div className="container mx-auto px-4 py-6">
-          <h1 className="text-3xl font-bold">🧩 File Editor</h1>
+          <h1 className="text-3xl font-bold">🧩 Dragon Media AI Mockup</h1>
           <p className="text-gray-400 mt-2">
             Session-based file editing • Auto-cleanup on exit
           </p>
