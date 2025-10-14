@@ -27,6 +27,8 @@ interface InteractivePreviewProps {
   onDesign2TransformChange: (updates: Partial<Transform>) => void
 }
 
+const url = 'https://mockupai.supover.com/api';
+
 function InteractivePreview({
   mockupImage,
   designImage,
@@ -1564,7 +1566,7 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
   const loadSellerMockups = async () => {
     setIsLoadingFiles(true)
     try {
-      const response = await fetch(`http://localhost:3001/api/files/${sellerId}/${sessionId}`)
+      const response = await fetch(`${url}/files/${sellerId}/${sessionId}`)
       if (!response.ok) {
         console.log('No server running or no saved files')
         alert('No files found for this session')
@@ -1595,7 +1597,7 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
           await new Promise<void>((resolve, reject) => {
             img.onload = () => resolve()
             img.onerror = () => reject(new Error(`Failed to load ${savedFile.name}`))
-            img.src = `http://localhost:3001/tmp/${sellerId}/${sessionId}/${savedFile.name}`
+            img.src = `${url}/tmp/${sellerId}/${sessionId}/${savedFile.name}`
           })
 
           // Convert to data URL for consistency
@@ -2144,7 +2146,7 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
           formData.append('sessionId', sessionId)
           formData.append('sellerId', sellerId)
 
-          const response = await fetch('http://localhost:3001/api/files/upload', {
+          const response = await fetch(`${url}/files/upload`, {
             method: 'POST',
             body: formData
           })
@@ -2166,7 +2168,7 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
           formData.append('sessionId', sessionId)
           formData.append('sellerId', sellerId)
 
-          const uploadResponse = await fetch('http://localhost:3001/api/files/upload', {
+          const uploadResponse = await fetch(`${url}/files/upload`, {
             method: 'POST',
             body: formData
           })
@@ -2182,7 +2184,7 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
 
       // 2. Delete files from session folder
       for (const fileName of deletedFileNames) {
-        const response = await fetch(`http://localhost:3001/api/files/${sellerId}/${sessionId}/${fileName}`, {
+        const response = await fetch(`${url}/files/${sellerId}/${sessionId}/${fileName}`, {
           method: 'DELETE'
         })
 

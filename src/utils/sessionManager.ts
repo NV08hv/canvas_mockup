@@ -1,5 +1,5 @@
 // Session management for embedded file editing project
-const API_BASE = 'http://localhost:3001/api'
+const API_BASE = 'https://mockupai.supover.com/api'
 const HEARTBEAT_INTERVAL = 60 * 1000 // 1 minute
 const SESSION_STORAGE_KEY = 'file_editor_session'
 
