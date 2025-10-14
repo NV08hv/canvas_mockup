@@ -27,7 +27,35 @@ interface InteractivePreviewProps {
   onDesign2TransformChange: (updates: Partial<Transform>) => void
 }
 
-const url = 'https://mockupai.supover.com/api';
+const API_BASE = `${window.location.origin}/api`
+const FILE_BASE = window.location.origin
+
+// Try loading a static file from FILE_BASE first, then fall back to API_BASE
+async function loadImageWithFallback(relativePath: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+
+    let triedFallback = false
+
+    const tryLoad = (base: string) => {
+      const fullUrl = `${base}${relativePath}`
+      img.src = fullUrl
+    }
+
+    img.onload = () => resolve(img)
+    img.onerror = () => {
+      if (!triedFallback) {
+        triedFallback = true
+        tryLoad(API_BASE)
+      } else {
+        reject(new Error('Failed to load image from both paths'))
+      }
+    }
+
+    tryLoad(FILE_BASE)
+  })
+}
 
 function InteractivePreview({
   mockupImage,
@@ -1566,7 +1594,7 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
   const loadSellerMockups = async () => {
     setIsLoadingFiles(true)
     try {
-      const response = await fetch(`${url}/files/${sellerId}/${sessionId}`)
+      const response = await fetch(`${API_BASE}/files/${sellerId}/${sessionId}`)
       if (!response.ok) {
         console.log('No server running or no saved files')
         alert('No files found for this session')
@@ -1582,8 +1610,6 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
         return
       }
 
-      console.log('Loading saved files for session:', savedFiles)
-
       // Convert saved files to ImageFile format with full URLs
       const loadedFiles: ImageFile[] = []
       const loadedImages: HTMLImageElement[] = []
@@ -1594,11 +1620,8 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
           const img = new Image()
           img.crossOrigin = 'anonymous'
 
-          await new Promise<void>((resolve, reject) => {
-            img.onload = () => resolve()
-            img.onerror = () => reject(new Error(`Failed to load ${savedFile.name}`))
-            img.src = `${url}/tmp/${sellerId}/${sessionId}/${savedFile.name}`
-          })
+          // Load with fallback between FILE_BASE and API_BASE
+          await loadImageWithFallback(`/tmp/${sellerId}/${sessionId}/${savedFile.name}`)
 
           // Convert to data URL for consistency
           const canvas = document.createElement('canvas')
@@ -2131,12 +2154,6 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
     // Get newly uploaded files (not from database)
     const newFiles = mockupFiles.filter(file => !file.isFromDatabase)
 
-    console.log('=== SAVE OPERATION ===')
-    console.log('Session ID:', sessionId)
-    console.log('Seller ID:', sellerId)
-    console.log('New files to upload:', newFiles.map(f => ({ name: f.name, index: f.index })))
-    console.log('Files to delete:', deletedFileNames)
-
     try {
       // 1. Upload new files to session folder
       for (const file of newFiles) {
@@ -2146,7 +2163,7 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
           formData.append('sessionId', sessionId)
           formData.append('sellerId', sellerId)
 
-          const response = await fetch(`${url}/files/upload`, {
+          const response = await fetch(`${API_BASE}/files/upload`, {
             method: 'POST',
             body: formData
           })
@@ -2168,7 +2185,7 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
           formData.append('sessionId', sessionId)
           formData.append('sellerId', sellerId)
 
-          const uploadResponse = await fetch(`${url}/files/upload`, {
+          const uploadResponse = await fetch(`${API_BASE}/files/upload`, {
             method: 'POST',
             body: formData
           })
@@ -2184,7 +2201,7 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
 
       // 2. Delete files from session folder
       for (const fileName of deletedFileNames) {
-        const response = await fetch(`${url}/files/${sellerId}/${sessionId}/${fileName}`, {
+        const response = await fetch(`${API_BASE}/files/${sellerId}/${sessionId}/${fileName}`, {
           method: 'DELETE'
         })
 
@@ -2201,11 +2218,8 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
       setDeletedFileNames([])
 
       alert('Changes saved successfully!\n\n' +
-            'Session ID: ' + sessionId.substring(0, 8) + '...\n' +
-            'Seller ID: ' + sellerId + '\n' +
             'New files uploaded: ' + newFiles.length + '\n' +
-            'Files deleted: ' + deletedFileNames.length + '\n\n' +
-            'Files saved to session: tmp/' + sellerId + '/' + sessionId + '/')
+            'Files deleted: ' + deletedFileNames.length)
     } catch (error) {
       console.error('Save error:', error)
       alert('Error saving files: ' + (error as Error).message + '\n\nMake sure the server is running: npm run server')

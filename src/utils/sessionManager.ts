@@ -67,8 +67,6 @@ class SessionManager {
       // Start heartbeat
       this.startHeartbeat()
 
-      console.log(data.restored ? 'Session restored' : 'New session created', sessionData)
-
       return sessionData
     } catch (error) {
       console.error('Error initializing session:', error)
