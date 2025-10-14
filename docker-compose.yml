@@ -1,6 +1,29 @@
 version: '3.8'
 
 services:
+  # Backend (Express API server)
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: mockup_backend
+    restart: always
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./tmp:/app/tmp
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+    networks:
+      - mockup_network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/api/session/create"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
   # Frontend (React app)
   frontend:
     build:
@@ -10,9 +33,17 @@ services:
     restart: always
     ports:
       - "5173:5173"
+    depends_on:
+      - backend
+    environment:
+      - VITE_API_URL=http://backend:3001
     networks:
       - mockup_network
 
 networks:
   mockup_network:
     driver: bridge
+
+volumes:
+  session_data:
+    driver: local

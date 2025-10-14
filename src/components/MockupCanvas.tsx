@@ -50,7 +50,6 @@ function InteractivePreview({
   // Get active layer's properties
   const currentTransform = activeLayer === 'design1' ? design1Transform : design2Transform
   const currentImage = activeLayer === 'design1' ? designImage : design2Image
-  const currentBlendMode = activeLayer === 'design1' ? design1BlendMode : design2BlendMode
   const onTransformChange = activeLayer === 'design1' ? onDesign1TransformChange : onDesign2TransformChange
 
   // Local transform for smooth updates
@@ -1497,9 +1496,13 @@ const BLEND_MODES: GlobalCompositeOperation[] = [
 
 type BlendMode = GlobalCompositeOperation
 
-function MockupCanvas() {
+interface MockupCanvasProps {
+  sessionId: string
+  sellerId: string
+}
+
+function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const [sellerId] = useState<number>(10) // Default sellerId
   const [mockupImages, setMockupImages] = useState<HTMLImageElement[]>([])
   const [mockupFiles, setMockupFiles] = useState<ImageFile[]>([]) // Track file metadata with indices
   const [deletedFileNames, setDeletedFileNames] = useState<string[]>([]) // Track files to delete on save
@@ -1561,23 +1564,23 @@ function MockupCanvas() {
   const loadSellerMockups = async () => {
     setIsLoadingFiles(true)
     try {
-      const response = await fetch(`http://localhost:3001/api/mockups/${sellerId}`)
+      const response = await fetch(`http://localhost:3001/api/files/${sellerId}/${sessionId}`)
       if (!response.ok) {
         console.log('No server running or no saved files')
-        alert('No mockups found for seller ' + sellerId)
+        alert('No files found for this session')
         setIsLoadingFiles(false)
         return
       }
 
       const savedFiles = await response.json()
       if (savedFiles.length === 0) {
-        console.log('No saved mockup files found for seller ' + sellerId)
-        alert('No mockups found for seller ' + sellerId)
+        console.log('No saved files found for session')
+        alert('No files found for this session')
         setIsLoadingFiles(false)
         return
       }
 
-      console.log('Loading saved files for seller ' + sellerId + ':', savedFiles)
+      console.log('Loading saved files for session:', savedFiles)
 
       // Convert saved files to ImageFile format with full URLs
       const loadedFiles: ImageFile[] = []
@@ -1592,7 +1595,7 @@ function MockupCanvas() {
           await new Promise<void>((resolve, reject) => {
             img.onload = () => resolve()
             img.onerror = () => reject(new Error(`Failed to load ${savedFile.name}`))
-            img.src = `http://localhost:3001${savedFile.path}`
+            img.src = `http://localhost:3001/tmp/${sellerId}/${sessionId}/${savedFile.name}`
           })
 
           // Convert to data URL for consistency
@@ -2127,20 +2130,21 @@ function MockupCanvas() {
     const newFiles = mockupFiles.filter(file => !file.isFromDatabase)
 
     console.log('=== SAVE OPERATION ===')
+    console.log('Session ID:', sessionId)
     console.log('Seller ID:', sellerId)
     console.log('New files to upload:', newFiles.map(f => ({ name: f.name, index: f.index })))
     console.log('Files to delete:', deletedFileNames)
 
     try {
-      // 1. Upload new files to public/mockups_<sellerId> folder
+      // 1. Upload new files to session folder
       for (const file of newFiles) {
         if (file.file) {
           const formData = new FormData()
           formData.append('file', file.file)
-          formData.append('index', file.index?.toString() || '0')
-          formData.append('sellerId', sellerId.toString())
+          formData.append('sessionId', sessionId)
+          formData.append('sellerId', sellerId)
 
-          const response = await fetch('http://localhost:3001/api/mockups', {
+          const response = await fetch('http://localhost:3001/api/files/upload', {
             method: 'POST',
             body: formData
           })
@@ -2159,10 +2163,10 @@ function MockupCanvas() {
 
           const formData = new FormData()
           formData.append('file', uploadFile)
-          formData.append('index', file.index?.toString() || '0')
-          formData.append('sellerId', sellerId.toString())
+          formData.append('sessionId', sessionId)
+          formData.append('sellerId', sellerId)
 
-          const uploadResponse = await fetch('http://localhost:3001/api/mockups', {
+          const uploadResponse = await fetch('http://localhost:3001/api/files/upload', {
             method: 'POST',
             body: formData
           })
@@ -2176,9 +2180,9 @@ function MockupCanvas() {
         }
       }
 
-      // 2. Delete files from seller-specific folder
+      // 2. Delete files from session folder
       for (const fileName of deletedFileNames) {
-        const response = await fetch(`http://localhost:3001/api/mockups/${sellerId}/${fileName}`, {
+        const response = await fetch(`http://localhost:3001/api/files/${sellerId}/${sessionId}/${fileName}`, {
           method: 'DELETE'
         })
 
@@ -2195,10 +2199,11 @@ function MockupCanvas() {
       setDeletedFileNames([])
 
       alert('Changes saved successfully!\n\n' +
+            'Session ID: ' + sessionId.substring(0, 8) + '...\n' +
             'Seller ID: ' + sellerId + '\n' +
             'New files uploaded: ' + newFiles.length + '\n' +
             'Files deleted: ' + deletedFileNames.length + '\n\n' +
-            'Files saved to: public/mockup_' + sellerId + '/')
+            'Files saved to session: tmp/' + sellerId + '/' + sessionId + '/')
     } catch (error) {
       console.error('Save error:', error)
       alert('Error saving files: ' + (error as Error).message + '\n\nMake sure the server is running: npm run server')

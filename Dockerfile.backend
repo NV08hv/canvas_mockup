@@ -1,0 +1,30 @@
+# Backend Dockerfile for session-based file server
+FROM node:18-alpine
+
+# Install wget for healthcheck
+RUN apk add --no-cache wget
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install --production
+
+# Copy server file
+COPY server.js ./
+
+# Create tmp directory for session files
+RUN mkdir -p tmp/uploads
+
+# Expose port
+EXPOSE 3001
+
+# Set environment variables
+ENV NODE_ENV=production
+ENV PORT=3001
+
+# Start server
+CMD ["node", "server.js"]
