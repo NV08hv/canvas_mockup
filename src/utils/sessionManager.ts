@@ -1,7 +1,7 @@
 // Session management for embedded file editing project
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'https://mockupai.supover.com'}/api`
-const HEARTBEAT_INTERVAL = 60 * 1000 // 1 minute
-const SESSION_STORAGE_KEY = 'file_editor_session'
+const HEARTBEAT_INTERVAL = import.meta.env.VITE_HEARTBEAT_INTERVAL || 10 * 60 * 1000 // 10 minutes
+const SESSION_STORAGE_KEY = import.meta.env.VITE_SESSION_STORAGE_KEY || 'file_editor_session'
 
 interface SessionData {
   sessionId: string

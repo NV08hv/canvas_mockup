@@ -21,8 +21,8 @@ app.use(cors({
 app.use(express.json())
 
 // Session configuration
-const SESSION_TIMEOUT = parseInt(process.env.SESSION_TIMEOUT) || 5 * 60 * 1000 // 5 minutes in milliseconds
-const CLEANUP_CHECK_INTERVAL = parseInt(process.env.CLEANUP_CHECK_INTERVAL) || 60 * 1000 // Check every minute
+const SESSION_TIMEOUT = parseInt(process.env.SESSION_TIMEOUT) || 15 * 60 * 1000 // 15 minutes in milliseconds
+const CLEANUP_CHECK_INTERVAL = parseInt(process.env.CLEANUP_CHECK_INTERVAL) || 10 * 60 * 1000 // Check every 10 minutes
 const TMP_DIR = path.join(__dirname, 'tmp')
 
 // In-memory session storage (persisted to filesystem)
@@ -52,15 +52,28 @@ function loadSessions() {
   }
 }
 
-// Save sessions to filesystem
-function saveSessions() {
+// Batch file writing with debouncing
+let saveTimeout = null
+const SAVE_DEBOUNCE_DELAY = parseInt(process.env.SAVE_DEBOUNCE_DELAY) || 2000 // Save after 2 seconds of inactivity
+
+// Save sessions to filesystem (async with debouncing)
+async function saveSessions() {
   try {
     const sessionFile = path.join(TMP_DIR, 'sessions.json')
     const data = Array.from(sessions.values())
-    fs.writeFileSync(sessionFile, JSON.stringify(data, null, 2))
+    await fs.promises.writeFile(sessionFile, JSON.stringify(data, null, 2))
+    console.log(`Saved ${sessions.size} sessions to disk`)
   } catch (error) {
     console.error('Error saving sessions:', error)
   }
+}
+
+// Debounced save function - batches multiple updates
+function scheduleSaveSessions() {
+  if (saveTimeout) {
+    clearTimeout(saveTimeout)
+  }
+  saveTimeout = setTimeout(saveSessions, SAVE_DEBOUNCE_DELAY)
 }
 
 // Generate unique session ID
@@ -73,12 +86,12 @@ function updateSessionActivity(sessionId) {
   const session = sessions.get(sessionId)
   if (session) {
     session.lastActivity = new Date()
-    saveSessions()
+    scheduleSaveSessions() // Use debounced save instead of immediate save
   }
 }
 
 // Cleanup expired sessions
-function cleanupExpiredSessions() {
+async function cleanupExpiredSessions() {
   const now = Date.now()
   let cleanedCount = 0
 
@@ -97,7 +110,7 @@ function cleanupExpiredSessions() {
   })
 
   if (cleanedCount > 0) {
-    saveSessions()
+    await saveSessions() // Use async save for cleanup
   }
 }
 
@@ -154,7 +167,7 @@ app.post('/api/session/create', (req, res) => {
     }
 
     sessions.set(newSessionId, session)
-    saveSessions()
+    scheduleSaveSessions()
 
     console.log(`Created new session: ${newSessionId} for seller: ${sellerId}`)
 

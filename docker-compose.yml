@@ -17,8 +17,8 @@ services:
     environment:
       - NODE_ENV=${NODE_ENV:-production}
       - PORT=${PORT:-3001}
-      - SESSION_TIMEOUT=${SESSION_TIMEOUT:-300000}
-      - CLEANUP_CHECK_INTERVAL=${CLEANUP_CHECK_INTERVAL:-60000}
+      - SESSION_TIMEOUT=${SESSION_TIMEOUT:-900000}
+      - CLEANUP_CHECK_INTERVAL=${CLEANUP_CHECK_INTERVAL:-600000}
     networks:
       - mockup_network
     healthcheck:
