@@ -1539,6 +1539,7 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
   const [selectedMockupIndex, setSelectedMockupIndex] = useState<number>(0)
   const [mockupImage, setMockupImage] = useState<HTMLImageElement | null>(null)
   const [isLoadingFiles, setIsLoadingFiles] = useState(false) // Changed to false - load on button click
+  const [isSaving, setIsSaving] = useState(false) // Loading state for save operation
 
   // Design state
   const [design1, setDesign1] = useState<DesignState>({
@@ -1616,19 +1617,15 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
 
       for (const savedFile of savedFiles) {
         try {
-          // Load image from public folder
-          const img = new Image()
-          img.crossOrigin = 'anonymous'
-
-          // Load with fallback between FILE_BASE and API_BASE
-          await loadImageWithFallback(`/tmp/${sellerId}/${sessionId}/${savedFile.name}`)
+          // Load with fallback between FILE_BASE and API_BASE and wait until fully loaded
+          const img = await loadImageWithFallback(`/tmp/${sellerId}/${sessionId}/${savedFile.name}`)
 
           // Convert to data URL for consistency
           const canvas = document.createElement('canvas')
           canvas.width = img.width
           canvas.height = img.height
           const ctx = canvas.getContext('2d')
-          if (ctx) {
+          if (ctx && img.width > 0 && img.height > 0) {
             ctx.drawImage(img, 0, 0)
             const dataUrl = canvas.toDataURL('image/png')
 
@@ -1642,6 +1639,8 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
             })
 
             loadedImages.push(img)
+          } else {
+            console.warn(`Skipped zero-size image: ${savedFile.name}`)
           }
         } catch (error) {
           console.error(`Error loading file ${savedFile.name}:`, error)
@@ -1653,8 +1652,7 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
         setMockupImages(loadedImages)
         setSelectedMockupIndex(0)
         setMockupImage(loadedImages[0])
-        console.log(`Loaded ${loadedFiles.length} saved mockup files for seller ${sellerId}`)
-        alert(`Loaded ${loadedFiles.length} mockup(s) for seller ${sellerId}`)
+        alert(`Loaded ${loadedFiles.length} mockup(s)`)
       }
     } catch (error) {
       console.error('Error loading saved files:', error)
@@ -2151,6 +2149,7 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
 
   // Save changes to local public folder (seller-specific)
   const handleSave = async () => {
+    setIsSaving(true)
     // Get newly uploaded files (not from database)
     const newFiles = mockupFiles.filter(file => !file.isFromDatabase)
 
@@ -2220,9 +2219,11 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
       alert('Changes saved successfully!\n\n' +
             'New files uploaded: ' + newFiles.length + '\n' +
             'Files deleted: ' + deletedFileNames.length)
+      setIsSaving(false)
     } catch (error) {
       console.error('Save error:', error)
       alert('Error saving files: ' + (error as Error).message + '\n\nMake sure the server is running: npm run server')
+      setIsSaving(false)
     }
   }
 
@@ -2307,10 +2308,10 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
               {/* Save Changes Button */}
               <button
                 onClick={handleSave}
-                disabled={mockupFiles.filter(f => !f.isFromDatabase).length === 0 && deletedFileNames.length === 0}
+                disabled={isSaving || (mockupFiles.filter(f => !f.isFromDatabase).length === 0 && deletedFileNames.length === 0)}
                 className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold py-3 px-4 rounded transition text-sm"
               >
-                Save Changes
+                {isSaving ? 'Saving...' : 'Save Changes'}
               </button>
             </div>
 
