@@ -9,12 +9,16 @@ services:
     container_name: mockup_backend
     restart: always
     ports:
-      - "3001:3001"
+      - "${PORT:-3001}:${PORT:-3001}"
     volumes:
       - ./tmp:/app/tmp
+    env_file:
+      - .env
     environment:
-      - NODE_ENV=production
-      - PORT=3001
+      - NODE_ENV=${NODE_ENV:-production}
+      - PORT=${PORT:-3001}
+      - SESSION_TIMEOUT=${SESSION_TIMEOUT:-300000}
+      - CLEANUP_CHECK_INTERVAL=${CLEANUP_CHECK_INTERVAL:-60000}
     networks:
       - mockup_network
     healthcheck:
@@ -29,14 +33,18 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        - VITE_API_BASE_URL=${VITE_API_BASE_URL:-https://mockupai.supover.com}
     container_name: mockup_frontend
     restart: always
     ports:
       - "5173:5173"
     depends_on:
       - backend
+    env_file:
+      - .env
     environment:
-      - VITE_API_URL=http://backend:3001
+      - VITE_API_BASE_URL=${VITE_API_BASE_URL:-https://mockupai.supover.com}
     networks:
       - mockup_network
     healthcheck:

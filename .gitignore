@@ -27,3 +27,6 @@ dist-ssr
 tmp/
 sessions.json
 uploads/
+
+public/
+.env

@@ -11,7 +11,7 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 const app = express()
-const PORT = 3001
+const PORT = process.env.PORT || 3001
 
 // Enable CORS with credentials support
 app.use(cors({
@@ -21,8 +21,8 @@ app.use(cors({
 app.use(express.json())
 
 // Session configuration
-const SESSION_TIMEOUT = 5 * 60 * 1000 // 5 minutes in milliseconds
-const CLEANUP_CHECK_INTERVAL = 60 * 1000 // Check every minute
+const SESSION_TIMEOUT = parseInt(process.env.SESSION_TIMEOUT) || 5 * 60 * 1000 // 5 minutes in milliseconds
+const CLEANUP_CHECK_INTERVAL = parseInt(process.env.CLEANUP_CHECK_INTERVAL) || 60 * 1000 // Check every minute
 const TMP_DIR = path.join(__dirname, 'tmp')
 
 // In-memory session storage (persisted to filesystem)

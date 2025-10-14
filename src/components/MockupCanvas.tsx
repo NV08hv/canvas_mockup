@@ -27,8 +27,8 @@ interface InteractivePreviewProps {
   onDesign2TransformChange: (updates: Partial<Transform>) => void
 }
 
-const API_BASE = 'https://mockupai.supover.com/api'
-const FILE_BASE = 'https://mockupai.supover.com'
+const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'https://mockupai.supover.com'}/api`
+const FILE_BASE = import.meta.env.VITE_API_BASE_URL || 'https://mockupai.supover.com'
 
 // Try loading a static file from FILE_BASE first, then fall back to API_BASE
 async function loadImageWithFallback(relativePath: string): Promise<HTMLImageElement> {
