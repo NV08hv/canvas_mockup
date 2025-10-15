@@ -11,7 +11,7 @@ function App() {
   useEffect(() => {
     // Get sellerId from URL parameters
     const urlParams = new URLSearchParams(window.location.search)
-    const sellerIdParam = urlParams.get('sellerId') || 'default'
+    const sellerIdParam = urlParams.get('user_id') || 'default'
 
     setSellerId(sellerIdParam)
 

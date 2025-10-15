@@ -1897,6 +1897,35 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
     setCanvasRefreshKey(prev => prev + 1)
   }
 
+  // Delete all mockup images
+  const deleteAllMockups = () => {
+    // Collect names of files that exist in the database for deletion on save
+    const dbFileNamesToDelete = mockupFiles
+      .filter(file => file && file.isFromDatabase)
+      .map(file => file.name)
+
+    if (dbFileNamesToDelete.length > 0) {
+      setDeletedFileNames(prev => [...prev, ...dbFileNamesToDelete])
+    }
+
+    // Clear mockup images and files
+    setMockupImages([])
+    setMockupFiles([])
+
+    // Reset per-mockup custom settings and offsets
+    setMockupCustomTransforms1(new Map())
+    setMockupCustomBlendModes1(new Map())
+    setMockupOffsets(new Map())
+
+    // Reset selection and edit mode
+    setSelectedMockupIndex(0)
+    if (editMode.active) {
+      setEditMode({ active: false, mockupIndex: null })
+    }
+
+    setCanvasRefreshKey(prev => prev + 1)
+  }
+
   // Render canvas
   useEffect(() => {
     const canvas = canvasRef.current
@@ -2288,9 +2317,11 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
         <div>
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-semibold">Upload Images</h2>
+            {/*
             <div className="text-sm text-gray-400">
               Seller ID: <span className="text-blue-400 font-semibold">{sellerId}</span>
             </div>
+            */}
           </div>
 
           <div className="space-y-4">
@@ -2579,6 +2610,21 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
                 {mockupImages.length} mockup(s)
                 {design1.image && ` • Design loaded`}
               </p>
+              <div className="mt-3">
+                <button
+                  onClick={() => {
+                    if (mockupImages.length === 0) return
+                    if (confirm('Delete ALL mockups? This will mark saved files for deletion and clear the list.')) {
+                      deleteAllMockups()
+                    }
+                  }}
+                  className="w-full bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded transition disabled:bg-gray-600 disabled:cursor-not-allowed"
+                  disabled={mockupImages.length === 0}
+                  title="Delete all mockups"
+                >
+                  Delete All
+                </button>
+              </div>
             </div>
 
             {/* Edit Mode Header */}
