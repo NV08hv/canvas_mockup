@@ -56,13 +56,13 @@ User visits site → Session created → sessionId generated
 ```
 POST /api/session/create
 Body: {
-  sellerId: string,
+  userId: string,
   sessionId?: string  // Optional, for restoring existing session
 }
 
 Response: {
   sessionId: string,
-  sellerId: string,
+  userId: string,
   restored: boolean
 }
 ```
@@ -97,7 +97,7 @@ Response: {
 
 #### List Session Files
 ```
-GET /api/files/:sellerId/:sessionId
+GET /api/files/:userId/:sessionId
 
 Response: [
   {
@@ -114,7 +114,7 @@ POST /api/files/upload
 Body: FormData {
   file: File,
   sessionId: string,
-  sellerId: string
+  userId: string
 }
 
 Response: {
@@ -128,7 +128,7 @@ Response: {
 
 #### Delete File
 ```
-DELETE /api/files/:sellerId/:sessionId/:filename
+DELETE /api/files/:userId/:sessionId/:filename
 
 Response: {
   message: "File deleted successfully",
@@ -138,7 +138,7 @@ Response: {
 
 #### Access Files
 ```
-GET /tmp/:sellerId/:sessionId/:filename
+GET /tmp/:userId/:sessionId/:filename
 ```
 Files are served statically from the tmp directory.
 
@@ -146,10 +146,10 @@ Files are served statically from the tmp directory.
 
 ### Embedding the Application
 
-Add the sellerId as a URL parameter when embedding:
+Add the userId as a URL parameter when embedding:
 
 ```html
-<iframe src="https://yourapp.com/?sellerId=seller123" />
+<iframe src="https://yourapp.com/?user_id=user123" />
 ```
 
 ### Session Manager Usage
@@ -160,11 +160,11 @@ The frontend automatically handles sessions via the `sessionManager` utility:
 import sessionManager from './utils/sessionManager'
 
 // Initialize session (called automatically in App.tsx)
-const session = await sessionManager.initializeSession(sellerId)
+const session = await sessionManager.initializeSession(userId)
 
 // Get current session info
 const sessionId = sessionManager.getSessionId()
-const sellerId = sessionManager.getSellerId()
+const userId = sessionManager.getUserId()
 
 // Manually end session (optional)
 await sessionManager.endSession()

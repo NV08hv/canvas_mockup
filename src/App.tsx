@@ -5,20 +5,20 @@ import { ToastProvider } from './components/Toast'
 
 function App() {
   const [sessionId, setSessionId] = useState<string | null>(null)
-  const [sellerId, setSellerId] = useState<string | null>(null)
+  const [userId, setUserId] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    // Get sellerId from URL parameters
+    // Get userId from URL parameters
     const urlParams = new URLSearchParams(window.location.search)
-    const sellerIdParam = urlParams.get('user_id') || 'default'
+    const userIdParam = urlParams.get('user_id') || 'default'
 
-    setSellerId(sellerIdParam)
+    setUserId(userIdParam)
 
     // Initialize session
     sessionManager
-      .initializeSession(sellerIdParam)
+      .initializeSession(userIdParam)
       .then((sessionData) => {
         setSessionId(sessionData.sessionId)
         setIsLoading(false)
@@ -71,17 +71,17 @@ function App() {
             <p className="text-gray-400 mt-2">
               Session-based file editing • Auto-cleanup on exit
             </p>
-            {sellerId && (
+            {userId && (
               <p className="text-xs text-gray-500 mt-2">
-                Seller: {sellerId} | Session: {sessionId?.substring(0, 8)}...
+                User: {userId} | Session: {sessionId?.substring(0, 8)}...
               </p>
             )}
           </div>
         </header>
 
         <main className="container mx-auto px-4 py-8">
-          {sessionId && sellerId ? (
-            <MockupCanvas sessionId={sessionId} sellerId={sellerId} />
+          {sessionId && userId ? (
+            <MockupCanvas sessionId={sessionId} userId={userId} />
           ) : (
             <div className="text-center text-gray-400">
               <p>Session not initialized</p>

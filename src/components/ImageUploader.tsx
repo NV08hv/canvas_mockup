@@ -1,5 +1,4 @@
 import { useState, useRef } from 'react'
-import { computeFileHash } from '../utils/imageHash'
 
 export interface ImageFile {
   id: string
@@ -9,7 +8,6 @@ export interface ImageFile {
   file: File // Always keep the original File object
   index?: number // Track the index for database synchronization
   isFromDatabase?: boolean // Track if this file came from the database
-  sha256: string // SHA-256 hash for content-addressed storage
   size: number // File size in bytes
   type: string // MIME type
   ext: string // File extension (e.g., '.png', '.jpg')
@@ -62,9 +60,6 @@ function ImageUploader({ onImagesLoaded, accept = 'image/*', label = 'Upload Ima
       // Create object URL for preview (memory efficient)
       const objectUrl = URL.createObjectURL(file)
 
-      // Compute SHA-256 hash from file
-      const sha256 = await computeFileHash(file)
-
       // Extract file extension
       const ext = file.name.substring(file.name.lastIndexOf('.'))
 
@@ -76,7 +71,6 @@ function ImageUploader({ onImagesLoaded, accept = 'image/*', label = 'Upload Ima
         file, // Keep original File object
         index: currentIndex,
         isFromDatabase: false,
-        sha256,
         size: file.size,
         type: file.type,
         ext,
@@ -158,9 +152,6 @@ function ImageUploader({ onImagesLoaded, accept = 'image/*', label = 'Upload Ima
       // Create object URL for preview
       const objectUrl = URL.createObjectURL(file)
 
-      // Compute SHA-256 hash from file
-      const sha256 = await computeFileHash(file)
-
       // Extract file extension
       const ext = filename.substring(filename.lastIndexOf('.')) || '.png'
 
@@ -172,7 +163,6 @@ function ImageUploader({ onImagesLoaded, accept = 'image/*', label = 'Upload Ima
         file, // Keep File object
         index: nextIndex,
         isFromDatabase: false,
-        sha256,
         size: file.size,
         type: file.type,
         ext,

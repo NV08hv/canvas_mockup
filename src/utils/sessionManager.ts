@@ -5,13 +5,13 @@ const SESSION_STORAGE_KEY = import.meta.env.VITE_SESSION_STORAGE_KEY || 'file_ed
 
 interface SessionData {
   sessionId: string
-  sellerId: string
+  userId: string
   createdAt: string
 }
 
 class SessionManager {
   private sessionId: string | null = null
-  private sellerId: string | null = null
+  private userId: string | null = null
   private heartbeatInterval: number | null = null
   private isActive: boolean = true
 
@@ -28,11 +28,11 @@ class SessionManager {
 
   /**
    * Initialize or restore a session
-   * @param sellerId - The seller ID from embedding site
+   * @param userId - The user ID from embedding site
    * @returns Session data
    */
-  async initializeSession(sellerId: string): Promise<SessionData> {
-    this.sellerId = sellerId
+  async initializeSession(userId: string): Promise<SessionData> {
+    this.userId = userId
 
     // Try to restore existing session from localStorage
     const storedSession = this.getStoredSession()
@@ -44,7 +44,7 @@ class SessionManager {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          sellerId,
+          userId,
           sessionId: storedSession?.sessionId || null
         })
       })
@@ -59,7 +59,7 @@ class SessionManager {
       // Store session in localStorage
       const sessionData: SessionData = {
         sessionId: data.sessionId,
-        sellerId: data.sellerId,
+        userId: data.userId,
         createdAt: new Date().toISOString()
       }
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(sessionData))
@@ -193,7 +193,7 @@ class SessionManager {
       // Clear localStorage
       localStorage.removeItem(SESSION_STORAGE_KEY)
       this.sessionId = null
-      this.sellerId = null
+      this.userId = null
     }
   }
 
@@ -205,10 +205,10 @@ class SessionManager {
   }
 
   /**
-   * Get current seller ID
+   * Get current user ID
    */
-  getSellerId(): string | null {
-    return this.sellerId
+  getUserId(): string | null {
+    return this.userId
   }
 
   /**

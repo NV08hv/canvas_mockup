@@ -99,10 +99,10 @@ async function cleanupExpiredSessions() {
     const timeSinceActivity = now - session.lastActivity.getTime()
     if (timeSinceActivity > SESSION_TIMEOUT) {
       // Delete session files
-      const sessionDir = path.join(TMP_DIR, session.sellerId, sessionId)
+      const sessionDir = path.join(TMP_DIR, session.userId, sessionId)
       if (fs.existsSync(sessionDir)) {
         fs.rmSync(sessionDir, { recursive: true, force: true })
-        console.log(`Cleaned up session: ${sessionId} (seller: ${session.sellerId})`)
+        console.log(`Cleaned up session: ${sessionId} (user: ${session.userId})`)
       }
       sessions.delete(sessionId)
       cleanedCount++
@@ -137,21 +137,21 @@ if (!fs.existsSync(tempUploadDir)) {
 // Create or retrieve session
 app.post('/api/session/create', (req, res) => {
   try {
-    const { sellerId, sessionId } = req.body
+    const { userId, sessionId } = req.body
 
-    if (!sellerId) {
-      return res.status(400).json({ error: 'Seller ID is required' })
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' })
     }
 
     // If sessionId provided, validate it exists
     if (sessionId && sessions.has(sessionId)) {
       const session = sessions.get(sessionId)
-      // Verify it belongs to the same seller
-      if (session.sellerId === sellerId) {
+      // Verify it belongs to the same user
+      if (session.userId === userId) {
         updateSessionActivity(sessionId)
         return res.json({
           sessionId: session.sessionId,
-          sellerId: session.sellerId,
+          userId: session.userId,
           restored: true
         })
       }
@@ -161,7 +161,7 @@ app.post('/api/session/create', (req, res) => {
     const newSessionId = generateSessionId()
     const session = {
       sessionId: newSessionId,
-      sellerId: sellerId,
+      userId: userId,
       createdAt: new Date(),
       lastActivity: new Date()
     }
@@ -169,11 +169,11 @@ app.post('/api/session/create', (req, res) => {
     sessions.set(newSessionId, session)
     scheduleSaveSessions()
 
-    console.log(`Created new session: ${newSessionId} for seller: ${sellerId}`)
+    console.log(`Created new session: ${newSessionId} for user: ${userId}`)
 
     res.json({
       sessionId: newSessionId,
-      sellerId: sellerId,
+      userId: userId,
       restored: false
     })
   } catch (error) {
@@ -216,7 +216,7 @@ app.post('/api/session/end', (req, res) => {
     const session = sessions.get(sessionId)
     if (session) {
       // Delete session files
-      const sessionDir = path.join(TMP_DIR, session.sellerId, sessionId)
+      const sessionDir = path.join(TMP_DIR, session.userId, sessionId)
       if (fs.existsSync(sessionDir)) {
         fs.rmSync(sessionDir, { recursive: true, force: true })
         console.log(`Manually ended session: ${sessionId}`)
@@ -233,18 +233,18 @@ app.post('/api/session/end', (req, res) => {
 })
 
 // Get all files for a session
-app.get('/api/files/:sellerId/:sessionId', (req, res) => {
+app.get('/api/files/:userId/:sessionId', (req, res) => {
   try {
-    const { sellerId, sessionId } = req.params
+    const { userId, sessionId } = req.params
 
     const session = sessions.get(sessionId)
-    if (!session || session.sellerId !== sellerId) {
+    if (!session || session.userId !== userId) {
       return res.status(404).json({ error: 'Session not found' })
     }
 
     updateSessionActivity(sessionId)
 
-    const sessionDir = path.join(TMP_DIR, sellerId, sessionId)
+    const sessionDir = path.join(TMP_DIR, userId, sessionId)
 
     // Check if directory exists
     if (!fs.existsSync(sessionDir)) {
@@ -268,138 +268,32 @@ app.get('/api/files/:sellerId/:sessionId', (req, res) => {
   }
 })
 
-// Check which hashes are missing (need upload) - new endpoint for diff check
-app.post('/api/files/diff', (req, res) => {
-  try {
-    const { sellerId, sessionId, hashes } = req.body
-
-    if (!sessionId || !sellerId || !hashes || !Array.isArray(hashes)) {
-      return res.status(400).json({ error: 'Invalid request' })
-    }
-
-    const session = sessions.get(sessionId)
-    if (!session || session.sellerId !== sellerId) {
-      return res.status(404).json({ error: 'Session not found' })
-    }
-
-    updateSessionActivity(sessionId)
-
-    const sessionDir = path.join(TMP_DIR, sellerId, sessionId)
-    const hashIndexFile = path.join(sessionDir, '.hash-index.json')
-
-    // Load existing hash index
-    let hashIndex = {}
-    if (fs.existsSync(hashIndexFile)) {
-      try {
-        hashIndex = JSON.parse(fs.readFileSync(hashIndexFile, 'utf-8'))
-      } catch (error) {
-        console.error('Error reading hash index:', error)
-      }
-    }
-
-    // Check which hashes are missing
-    const missing_hashes = hashes.filter(hash => !hashIndex[hash])
-
-    res.json({
-      missing_hashes,
-      existing_count: hashes.length - missing_hashes.length
-    })
-  } catch (error) {
-    console.error('Error checking hashes:', error)
-    res.status(500).json({ error: 'Failed to check hashes' })
-  }
-})
-
-// Check which hashes are unknown (need upload) - legacy endpoint
-app.post('/api/files/check-hashes', (req, res) => {
-  try {
-    const { sellerId, sessionId, files } = req.body
-
-    if (!sessionId || !sellerId || !files || !Array.isArray(files)) {
-      return res.status(400).json({ error: 'Invalid request' })
-    }
-
-    const session = sessions.get(sessionId)
-    if (!session || session.sellerId !== sellerId) {
-      return res.status(404).json({ error: 'Session not found' })
-    }
-
-    updateSessionActivity(sessionId)
-
-    const sessionDir = path.join(TMP_DIR, sellerId, sessionId)
-    const hashIndexFile = path.join(sessionDir, '.hash-index.json')
-
-    // Load existing hash index
-    let hashIndex = {}
-    if (fs.existsSync(hashIndexFile)) {
-      try {
-        hashIndex = JSON.parse(fs.readFileSync(hashIndexFile, 'utf-8'))
-      } catch (error) {
-        console.error('Error reading hash index:', error)
-      }
-    }
-
-    // Check which hashes are unknown
-    const unknownHashes = []
-    let skippedCount = 0
-
-    files.forEach(file => {
-      if (file.hash && !hashIndex[file.hash]) {
-        unknownHashes.push(file.hash)
-      } else if (file.hash && hashIndex[file.hash]) {
-        skippedCount++
-      }
-    })
-
-    res.json({
-      unknownHashes,
-      skippedCount
-    })
-  } catch (error) {
-    console.error('Error checking hashes:', error)
-    res.status(500).json({ error: 'Failed to check hashes' })
-  }
-})
 
 // Clear/reset all files for a session (for Delete All)
 app.post('/api/files/clear', (req, res) => {
   try {
-    const { sellerId, sessionId } = req.body
+    const { userId, sessionId } = req.body
 
-    if (!sessionId || !sellerId) {
-      return res.status(400).json({ error: 'Session ID and Seller ID are required' })
+    if (!sessionId || !userId) {
+      return res.status(400).json({ error: 'Session ID and User ID are required' })
     }
 
     const session = sessions.get(sessionId)
-    if (!session || session.sellerId !== sellerId) {
+    if (!session || session.userId !== userId) {
       return res.status(404).json({ error: 'Session not found' })
     }
 
     updateSessionActivity(sessionId)
 
-    const sessionDir = path.join(TMP_DIR, sellerId, sessionId)
-    const hashIndexFile = path.join(sessionDir, '.hash-index.json')
-    const manifestFile = path.join(sessionDir, 'manifest.json')
+    const sessionDir = path.join(TMP_DIR, userId, sessionId)
 
-    // Clear hash index
-    if (fs.existsSync(hashIndexFile)) {
-      fs.writeFileSync(hashIndexFile, JSON.stringify({}, null, 2))
-    }
-
-    // Clear manifest
-    if (fs.existsSync(manifestFile)) {
-      fs.writeFileSync(manifestFile, JSON.stringify({ files: [], updated_at: new Date().toISOString() }, null, 2))
-    }
-
-    // Delete all files in session directory (except index and manifest)
+    // Delete all files in session directory
     if (fs.existsSync(sessionDir)) {
       const files = fs.readdirSync(sessionDir)
       files.forEach(file => {
-        if (file !== '.hash-index.json' && file !== 'manifest.json') {
-          const filePath = path.join(sessionDir, file)
-          if (fs.statSync(filePath).isFile()) {
-            fs.unlinkSync(filePath)
-          }
+        const filePath = path.join(sessionDir, file)
+        if (fs.statSync(filePath).isFile()) {
+          fs.unlinkSync(filePath)
         }
       })
     }
@@ -413,85 +307,6 @@ app.post('/api/files/clear', (req, res) => {
   }
 })
 
-// Commit changes - update manifest atomically
-app.post('/api/files/commit', (req, res) => {
-  try {
-    const { sellerId, sessionId, kept, deleted, mapping } = req.body
-
-    if (!sessionId || !sellerId || !kept || !Array.isArray(kept)) {
-      return res.status(400).json({ error: 'Invalid request' })
-    }
-
-    const session = sessions.get(sessionId)
-    if (!session || session.sellerId !== sellerId) {
-      return res.status(404).json({ error: 'Session not found' })
-    }
-
-    updateSessionActivity(sessionId)
-
-    const sessionDir = path.join(TMP_DIR, sellerId, sessionId)
-    const hashIndexFile = path.join(sessionDir, '.hash-index.json')
-    const manifestFile = path.join(sessionDir, 'manifest.json')
-
-    // Load existing hash index
-    let hashIndex = {}
-    if (fs.existsSync(hashIndexFile)) {
-      try {
-        hashIndex = JSON.parse(fs.readFileSync(hashIndexFile, 'utf-8'))
-      } catch (error) {
-        console.error('Error reading hash index:', error)
-      }
-    }
-
-    // Build new manifest with only kept files
-    const newManifest = {
-      files: mapping || kept.map(hash => ({
-        hash,
-        name: hashIndex[hash]?.name || '',
-        size: hashIndex[hash]?.size || 0,
-        ext: hashIndex[hash]?.ext || ''
-      })),
-      updated_at: new Date().toISOString()
-    }
-
-    // Create session directory if it doesn't exist
-    if (!fs.existsSync(sessionDir)) {
-      fs.mkdirSync(sessionDir, { recursive: true })
-    }
-
-    // Write manifest
-    fs.writeFileSync(manifestFile, JSON.stringify(newManifest, null, 2))
-
-    // Optional: Clean up deleted files (garbage collection)
-    if (deleted && Array.isArray(deleted)) {
-      deleted.forEach(hash => {
-        if (hashIndex[hash]) {
-          const filePath = path.join(sessionDir, hashIndex[hash].name)
-          if (fs.existsSync(filePath)) {
-            try {
-              fs.unlinkSync(filePath)
-              delete hashIndex[hash]
-            } catch (error) {
-              console.error(`Failed to delete file ${hash}:`, error)
-            }
-          }
-        }
-      })
-      // Update hash index after deletions
-      fs.writeFileSync(hashIndexFile, JSON.stringify(hashIndex, null, 2))
-    }
-
-    console.log(`Committed manifest for session ${sessionId}: ${kept.length} files kept`)
-
-    res.json({
-      message: 'Manifest committed successfully',
-      files_count: kept.length
-    })
-  } catch (error) {
-    console.error('Error committing manifest:', error)
-    res.status(500).json({ error: 'Failed to commit manifest' })
-  }
-})
 
 // Upload file to session
 app.post('/api/files/upload', tempUpload.single('file'), (req, res) => {
@@ -500,50 +315,25 @@ app.post('/api/files/upload', tempUpload.single('file'), (req, res) => {
       return res.status(400).json({ error: 'No file uploaded' })
     }
 
-    const { sellerId, sessionId, hash, sha256, ext, index } = req.body
-    // Support both 'hash' and 'sha256' field names
-    const fileHash = sha256 || hash
+    const { userId, sessionId, ext } = req.body
 
-    if (!sessionId || !sellerId) {
+    if (!sessionId || !userId) {
       // Clean up uploaded file
       fs.unlinkSync(req.file.path)
-      return res.status(400).json({ error: 'Session ID and Seller ID are required' })
+      return res.status(400).json({ error: 'Session ID and User ID are required' })
     }
 
     const session = sessions.get(sessionId)
-    if (!session || session.sellerId !== sellerId) {
+    if (!session || session.userId !== userId) {
       // Clean up uploaded file
       fs.unlinkSync(req.file.path)
       return res.status(404).json({ error: 'Session not found' })
     }
 
     // Create session directory
-    const sessionDir = path.join(TMP_DIR, sellerId, sessionId)
+    const sessionDir = path.join(TMP_DIR, userId, sessionId)
     if (!fs.existsSync(sessionDir)) {
       fs.mkdirSync(sessionDir, { recursive: true })
-    }
-
-    const hashIndexFile = path.join(sessionDir, '.hash-index.json')
-
-    // Load existing hash index
-    let hashIndex = {}
-    if (fs.existsSync(hashIndexFile)) {
-      try {
-        hashIndex = JSON.parse(fs.readFileSync(hashIndexFile, 'utf-8'))
-      } catch (error) {
-        console.error('Error reading hash index:', error)
-      }
-    }
-
-    // Check if hash already exists (duplicate detection)
-    if (fileHash && hashIndex[fileHash]) {
-      // File with same hash already exists, skip upload
-      fs.unlinkSync(req.file.path)
-      return res.json({
-        message: 'File already exists (duplicate)',
-        file: hashIndex[fileHash],
-        duplicate: true
-      })
     }
 
     // Move file from temp to session directory with proper name
@@ -556,25 +346,13 @@ app.post('/api/files/upload', tempUpload.single('file'), (req, res) => {
 
     fs.renameSync(req.file.path, finalPath)
 
-    // Update hash index
-    if (fileHash) {
-      hashIndex[fileHash] = {
-        name: newFilename,
-        size: req.file.size,
-        index: index || 0,
-        uploadedAt: new Date().toISOString()
-      }
-      fs.writeFileSync(hashIndexFile, JSON.stringify(hashIndex, null, 2))
-    }
-
     updateSessionActivity(sessionId)
 
     res.json({
       message: 'File uploaded successfully',
       file: {
         name: newFilename,
-        size: req.file.size,
-        hash: fileHash
+        size: req.file.size
       }
     })
   } catch (error) {
@@ -588,18 +366,18 @@ app.post('/api/files/upload', tempUpload.single('file'), (req, res) => {
 })
 
 // Delete file from session
-app.delete('/api/files/:sellerId/:sessionId/:filename', (req, res) => {
+app.delete('/api/files/:userId/:sessionId/:filename', (req, res) => {
   try {
-    const { sellerId, sessionId, filename } = req.params
+    const { userId, sessionId, filename } = req.params
 
     const session = sessions.get(sessionId)
-    if (!session || session.sellerId !== sellerId) {
+    if (!session || session.userId !== userId) {
       return res.status(404).json({ error: 'Session not found' })
     }
 
     updateSessionActivity(sessionId)
 
-    const filePath = path.join(TMP_DIR, sellerId, sessionId, filename)
+    const filePath = path.join(TMP_DIR, userId, sessionId, filename)
 
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({ error: 'File not found' })
@@ -636,7 +414,7 @@ app.use('/tmp', express.static(TMP_DIR))
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`)
-  console.log(`Session files will be saved to: tmp/<sellerId>/<sessionId>/`)
+  console.log(`Session files will be saved to: tmp/<userId>/<sessionId>/`)
   console.log(`Session timeout: ${SESSION_TIMEOUT / 1000 / 60} minutes`)
   console.log(`Cleanup check interval: ${CLEANUP_CHECK_INTERVAL / 1000} seconds`)
 })

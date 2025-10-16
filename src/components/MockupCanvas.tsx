@@ -1502,10 +1502,10 @@ type BlendMode = GlobalCompositeOperation
 
 interface MockupCanvasProps {
   sessionId: string
-  sellerId: string
+  userId: string
 }
 
-function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
+function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const toast = useToast()
   const [mockupImages, setMockupImages] = useState<HTMLImageElement[]>([])
@@ -1569,54 +1569,32 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
 
   // Handle mockup images loaded from ImageUploader
   const handleMockupImagesLoaded = (images: HTMLImageElement[], files: ImageFile[]) => {
-    // Merge by SHA-256 hash (drop duplicates)
-    const existingHashMap = new Map<string, { file: ImageFile; image: HTMLImageElement }>()
-
-    // Build map of existing files by hash
-    mockupFiles.forEach((file, idx) => {
-      existingHashMap.set(file.sha256, { file, image: mockupImages[idx] })
-    })
-
     // Calculate next index based on existing files
     const maxIndex = mockupFiles.length > 0
       ? Math.max(...mockupFiles.map(f => f.index ?? -1))
       : -1
 
-    // Filter out duplicates and update indices for new files
+    // Update indices for new files
     const newFiles: ImageFile[] = []
-    const newImages: HTMLImageElement[] = []
     let nextIndex = maxIndex + 1
 
-    files.forEach((file, idx) => {
-      // Skip if hash already exists
-      if (existingHashMap.has(file.sha256)) {
-        console.log(`Skipping duplicate file: ${file.name} (hash: ${file.sha256.substring(0, 8)}...)`)
-        return
-      }
-
+    files.forEach((file) => {
       newFiles.push({
         ...file,
         index: nextIndex,
         isFromDatabase: false
       })
-      newImages.push(images[idx])
       nextIndex++
     })
 
-    // Show toast if duplicates were found
-    const duplicateCount = files.length - newFiles.length
-    if (duplicateCount > 0) {
-      toast.info(`Skipped ${duplicateCount} duplicate file${duplicateCount !== 1 ? 's' : ''}`)
-    }
-
     // Merge new files with existing
     setMockupFiles([...mockupFiles, ...newFiles])
-    setMockupImages([...mockupImages, ...newImages])
+    setMockupImages([...mockupImages, ...images])
 
     // If this is the first upload, select the first image
-    if (mockupImages.length === 0 && newImages.length > 0) {
+    if (mockupImages.length === 0 && images.length > 0) {
       setSelectedMockupIndex(0)
-      setMockupImage(newImages[0])
+      setMockupImage(images[0])
     }
   }
 
@@ -1628,8 +1606,102 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
   }, [selectedMockupIndex, mockupImages])
 
   // Handle Show Mockup button click
-  const handleShowMockup = () => {
-    setShowMockupModal(true)
+  const handleShowMockup = async () => {
+    try {
+      // Fetch files from server
+      const response = await fetch(`${API_BASE}/files/${userId}/${sessionId}`)
+
+      if (!response.ok) {
+        console.error('Failed to fetch files from server:', response.status)
+        toast.error('Failed to load mockups from server')
+        return
+      }
+
+      const serverFiles = await response.json()
+
+      // If no files on server, just open the modal with current mockupFiles
+      if (!serverFiles || serverFiles.length === 0) {
+        setShowMockupModal(true)
+        return
+      }
+
+      // Load images from server and create ImageFile objects
+      const loadedFiles: ImageFile[] = []
+
+      for (const serverFile of serverFiles) {
+        try {
+          // Construct the URL for the file
+          const fileUrl = `${import.meta.env.VITE_API_BASE_URL || 'https://mockupai.supover.com'}/tmp/${userId}/${sessionId}/${serverFile.name}`
+
+          // Fetch the file as a blob
+          const fileResponse = await fetch(fileUrl)
+          if (!fileResponse.ok) {
+            console.error(`Failed to fetch file: ${serverFile.name}`)
+            continue
+          }
+
+          const blob = await fileResponse.blob()
+          const file = new File([blob], serverFile.name, { type: blob.type || 'image/png' })
+
+          // Create object URL for preview
+          const objectUrl = URL.createObjectURL(blob)
+
+          // Extract file extension
+          const ext = serverFile.name.substring(serverFile.name.lastIndexOf('.')) || '.png'
+
+          // Create ImageFile object
+          const imageFile: ImageFile = {
+            id: Math.random().toString(36).substring(2, 11),
+            url: objectUrl,
+            name: serverFile.name,
+            source: 'file',
+            file: file,
+            index: serverFile.index,
+            isFromDatabase: true,
+            size: blob.size,
+            type: blob.type || 'image/png',
+            ext: ext
+          }
+
+          loadedFiles.push(imageFile)
+        } catch (error) {
+          console.error(`Error loading file ${serverFile.name}:`, error)
+        }
+      }
+
+      // Merge with existing mockupFiles, avoiding duplicates by name
+      const existingFileNames = new Set(mockupFiles.map(f => f.name))
+      const newFiles = loadedFiles.filter(f => !existingFileNames.has(f.name))
+
+      if (newFiles.length > 0) {
+        setMockupFiles([...mockupFiles, ...newFiles])
+
+        // Load images
+        const newImages: HTMLImageElement[] = []
+        for (const file of newFiles) {
+          try {
+            const img = new Image()
+            await new Promise<void>((resolve, reject) => {
+              img.onload = () => resolve()
+              img.onerror = () => reject(new Error('Failed to load image'))
+              img.src = file.url
+            })
+            newImages.push(img)
+          } catch (error) {
+            console.error(`Failed to load image: ${file.name}`, error)
+          }
+        }
+
+        setMockupImages([...mockupImages, ...newImages])
+        toast.success(`Loaded ${newFiles.length} mockup${newFiles.length !== 1 ? 's' : ''} from server`)
+      }
+
+      // Open the modal
+      setShowMockupModal(true)
+    } catch (error) {
+      console.error('Error loading mockups:', error)
+      toast.error('Failed to load mockups from server')
+    }
   }
 
   // Handle modal close
@@ -1880,13 +1952,13 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
   // Delete all mockup images (hard reset - no rehydration)
   const deleteAllMockups = async () => {
     try {
-      // Call server to clear manifest and hash index immediately
+      // Call server to clear files immediately
       const response = await fetch(`${API_BASE}/files/clear`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sessionId,
-          sellerId
+          userId
         })
       })
 
@@ -2175,33 +2247,12 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
     setIsSaving(true)
     let cancelRequested = false
     let progressToastId: string | null = null
-    let filesToUpload: ImageFile[] = []
     let uploadedCount = 0
     let failedCount = 0
 
     try {
-      // Step 1: Diff - determine what needs to be uploaded
-      const allHashes = mockupFiles.map(file => file.sha256)
-
-      const diffResponse = await fetch(`${API_BASE}/files/diff`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId,
-          sellerId,
-          hashes: allHashes
-        })
-      })
-
-      if (!diffResponse.ok) {
-        throw new Error(`Diff check failed: ${diffResponse.status} ${diffResponse.statusText}`)
-      }
-
-      const { missing_hashes } = await diffResponse.json()
-      console.log(`Diff complete: ${missing_hashes.length} files need upload`)
-
-      // Step 2: Upload missing files with progress tracking
-      filesToUpload = mockupFiles.filter(file => missing_hashes.includes(file.sha256))
+      // Upload files that are not from database
+      const filesToUpload = mockupFiles.filter(file => !file.isFromDatabase)
       const CONCURRENCY = 8
 
       if (filesToUpload.length > 0) {
@@ -2243,8 +2294,7 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
               const formData = new FormData()
               formData.append('file', file.file)
               formData.append('sessionId', sessionId)
-              formData.append('sellerId', sellerId)
-              formData.append('sha256', file.sha256)
+              formData.append('userId', userId)
               formData.append('ext', file.ext)
 
               const response = await fetch(`${API_BASE}/files/upload`, {
@@ -2297,43 +2347,11 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
         }
       }
 
-      // Step 3: Commit - atomically update manifest
-      // IMPORTANT: The server replaces the entire manifest with "kept" array
-      // So we just send current mockupFiles - the server will remove anything not in this list
-      const kept = mockupFiles.map(file => file.sha256)
-      const mapping = mockupFiles.map(file => ({
-        displayName: file.name,
-        sha256: file.sha256,
-        ext: file.ext
-      }))
-
-      // Deleted hashes are not actually needed - the commit endpoint replaces the manifest entirely
-      // But we send them anyway for reference counting / garbage collection
-      const deletedHashes: string[] = []
-
-      const commitResponse = await fetch(`${API_BASE}/files/commit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId,
-          sellerId,
-          kept,
-          deleted: deletedHashes,
-          mapping
-        })
-      })
-
-      if (!commitResponse.ok) {
-        throw new Error(`Commit failed: ${commitResponse.status} ${commitResponse.statusText}`)
-      }
-
-      await commitResponse.json()
-
       // Update UI state
       setMockupFiles(prev => prev.map(file => ({ ...file, isFromDatabase: true })))
       setDeletedFileNames([])
 
-      // Show success toast - only show number of files actually uploaded
+      // Show success toast
       let message: string
       let toastType: ToastType = 'success'
 
@@ -2457,7 +2475,7 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
             <h2 className="text-xl font-semibold">Upload Images</h2>
             {/*
             <div className="text-sm text-gray-400">
-              Seller ID: <span className="text-blue-400 font-semibold">{sellerId}</span>
+              User ID: <span className="text-blue-400 font-semibold">{userId}</span>
             </div>
             */}
           </div>
