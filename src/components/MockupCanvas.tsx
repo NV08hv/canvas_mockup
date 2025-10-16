@@ -2,6 +2,8 @@ import { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import JSZip from 'jszip'
 import ImageUploader, { ImageFile } from './ImageUploader'
+import MockupModal from './MockupModal'
+import { useToast } from './Toast'
 
 interface Transform {
   x: number
@@ -28,34 +30,6 @@ interface InteractivePreviewProps {
 }
 
 const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'https://mockupai.supover.com'}/api`
-const FILE_BASE = import.meta.env.VITE_API_BASE_URL || 'https://mockupai.supover.com'
-
-// Try loading a static file from FILE_BASE first, then fall back to API_BASE
-async function loadImageWithFallback(relativePath: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.crossOrigin = 'anonymous'
-
-    let triedFallback = false
-
-    const tryLoad = (base: string) => {
-      const fullUrl = `${base}${relativePath}`
-      img.src = fullUrl
-    }
-
-    img.onload = () => resolve(img)
-    img.onerror = () => {
-      if (!triedFallback) {
-        triedFallback = true
-        tryLoad(API_BASE)
-      } else {
-        reject(new Error('Failed to load image from both paths'))
-      }
-    }
-
-    tryLoad(FILE_BASE)
-  })
-}
 
 function InteractivePreview({
   mockupImage,
@@ -1533,13 +1507,14 @@ interface MockupCanvasProps {
 
 function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const toast = useToast()
   const [mockupImages, setMockupImages] = useState<HTMLImageElement[]>([])
   const [mockupFiles, setMockupFiles] = useState<ImageFile[]>([]) // Track file metadata with indices
   const [deletedFileNames, setDeletedFileNames] = useState<string[]>([]) // Track files to delete on save
   const [selectedMockupIndex, setSelectedMockupIndex] = useState<number>(0)
   const [mockupImage, setMockupImage] = useState<HTMLImageElement | null>(null)
-  const [isLoadingFiles, setIsLoadingFiles] = useState(false) // Changed to false - load on button click
   const [isSaving, setIsSaving] = useState(false) // Loading state for save operation
+  const [showMockupModal, setShowMockupModal] = useState(false) // Modal state for showing mockups
 
   // Design state
   const [design1, setDesign1] = useState<DesignState>({
@@ -1591,76 +1566,6 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
   const [dragInitialPos, setDragInitialPos] = useState({ x: 0, y: 0 })
   const [dragMockupIndex, setDragMockupIndex] = useState<number | null>(null)
 
-  // Load saved files for specific seller (manual trigger)
-  const loadSellerMockups = async () => {
-    setIsLoadingFiles(true)
-    try {
-      const response = await fetch(`${API_BASE}/files/${sellerId}/${sessionId}`)
-      if (!response.ok) {
-        console.log('No server running or no saved files')
-        alert('No files found for this session')
-        setIsLoadingFiles(false)
-        return
-      }
-
-      const savedFiles = await response.json()
-      if (savedFiles.length === 0) {
-        console.log('No saved files found for session')
-        alert('No files found for this session')
-        setIsLoadingFiles(false)
-        return
-      }
-
-      // Convert saved files to ImageFile format with full URLs
-      const loadedFiles: ImageFile[] = []
-      const loadedImages: HTMLImageElement[] = []
-
-      for (const savedFile of savedFiles) {
-        try {
-          // Load with fallback between FILE_BASE and API_BASE and wait until fully loaded
-          const img = await loadImageWithFallback(`/tmp/${sellerId}/${sessionId}/${savedFile.name}`)
-
-          // Convert to data URL for consistency
-          const canvas = document.createElement('canvas')
-          canvas.width = img.width
-          canvas.height = img.height
-          const ctx = canvas.getContext('2d')
-          if (ctx && img.width > 0 && img.height > 0) {
-            ctx.drawImage(img, 0, 0)
-            const dataUrl = canvas.toDataURL('image/png')
-
-            loadedFiles.push({
-              id: Math.random().toString(36).substring(2, 11),
-              url: dataUrl,
-              name: savedFile.name,
-              source: 'file',
-              index: savedFile.index,
-              isFromDatabase: true
-            })
-
-            loadedImages.push(img)
-          } else {
-            console.warn(`Skipped zero-size image: ${savedFile.name}`)
-          }
-        } catch (error) {
-          console.error(`Error loading file ${savedFile.name}:`, error)
-        }
-      }
-
-      if (loadedFiles.length > 0) {
-        setMockupFiles(loadedFiles)
-        setMockupImages(loadedImages)
-        setSelectedMockupIndex(0)
-        setMockupImage(loadedImages[0])
-        alert(`Loaded ${loadedFiles.length} mockup(s)`)
-      }
-    } catch (error) {
-      console.error('Error loading saved files:', error)
-      alert('Error loading mockups: ' + (error as Error).message)
-    } finally {
-      setIsLoadingFiles(false)
-    }
-  }
 
   // Handle mockup images loaded from ImageUploader
   const handleMockupImagesLoaded = (images: HTMLImageElement[], files: ImageFile[]) => {
@@ -1696,6 +1601,56 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
       setMockupImage(mockupImages[selectedMockupIndex])
     }
   }, [selectedMockupIndex, mockupImages])
+
+  // Handle Show Mockup button click
+  const handleShowMockup = () => {
+    setShowMockupModal(true)
+  }
+
+  // Handle modal close
+  const handleModalClose = () => {
+    setShowMockupModal(false)
+  }
+
+  // Handle modal Next button (with deletions applied)
+  const handleModalNext = async (remainingFiles: ImageFile[]) => {
+    // Load all images from remaining files
+    const loadedImages: HTMLImageElement[] = []
+
+    for (const file of remainingFiles) {
+      try {
+        const img = new Image()
+        await new Promise<void>((resolve, reject) => {
+          img.onload = () => resolve()
+          img.onerror = () => reject(new Error('Failed to load image'))
+          img.src = file.url
+        })
+        loadedImages.push(img)
+      } catch (error) {
+        console.error(`Failed to load image: ${file.name}`, error)
+      }
+    }
+
+    // Update state
+    setMockupFiles(remainingFiles)
+    setMockupImages(loadedImages)
+
+    // Update selected index if needed
+    if (loadedImages.length > 0) {
+      if (selectedMockupIndex >= loadedImages.length) {
+        setSelectedMockupIndex(0)
+        setMockupImage(loadedImages[0])
+      } else {
+        setMockupImage(loadedImages[selectedMockupIndex])
+      }
+    } else {
+      setSelectedMockupIndex(0)
+      setMockupImage(null)
+    }
+
+    // Close modal
+    setShowMockupModal(false)
+  }
 
   // Load design 1 image
   const handleDesign1Upload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2179,79 +2134,168 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
   // Save changes to local public folder (seller-specific)
   const handleSave = async () => {
     setIsSaving(true)
+    setSaveError(null) // Clear previous errors
+
     // Get newly uploaded files (not from database)
     const newFiles = mockupFiles.filter(file => !file.isFromDatabase)
 
     try {
-      // 1. Upload new files to session folder
-      for (const file of newFiles) {
-        if (file.file) {
+      // Step 1: Send metadata with hashes to check for duplicates
+      const metadata = newFiles.map(file => ({
+        hash: file.hash,
+        name: file.name,
+        size: file.size || 0,
+        index: file.index
+      }))
+
+      const checkUrl = `${API_BASE}/files/check-hashes`
+      console.log('Checking hashes:', checkUrl, metadata)
+
+      const checkResponse = await fetch(checkUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          sellerId,
+          files: metadata
+        })
+      })
+
+      if (!checkResponse.ok) {
+        const errorText = await checkResponse.text()
+        let errorBody
+        let errorMessage = errorText
+
+        try {
+          errorBody = JSON.parse(errorText)
+          errorMessage = errorBody.error || errorBody.message || errorText
+        } catch {
+          // If not JSON, try to extract error from HTML
+          const preMatch = errorText.match(/<pre>(.+?)<\/pre>/s)
+          if (preMatch) {
+            errorMessage = preMatch[1].trim()
+          } else {
+            errorMessage = errorText
+          }
+        }
+
+        const errorMsg = `Check hashes failed [${checkResponse.status} ${checkResponse.statusText}]: ${errorMessage}`
+        console.error('Check hashes error:', {
+          url: checkUrl,
+          status: checkResponse.status,
+          statusText: checkResponse.statusText,
+          body: errorText
+        })
+        throw new Error(errorMsg)
+      }
+
+      const checkResult = await checkResponse.json()
+      const { unknownHashes, skippedCount } = checkResult
+
+      // Step 2: Upload only files with unknown hashes (parallel, max 4 at a time)
+      const filesToUpload = newFiles.filter(file => unknownHashes.includes(file.hash))
+      const uploadedCount = filesToUpload.length
+
+      // Parallel uploads with concurrency limit
+      const CONCURRENCY = 4
+      for (let i = 0; i < filesToUpload.length; i += CONCURRENCY) {
+        const batch = filesToUpload.slice(i, i + CONCURRENCY)
+        await Promise.all(batch.map(async (file) => {
           const formData = new FormData()
-          formData.append('file', file.file)
-          formData.append('sessionId', sessionId)
-          formData.append('sellerId', sellerId)
 
-          const response = await fetch(`${API_BASE}/files/upload`, {
-            method: 'POST',
-            body: formData
-          })
-
-          if (!response.ok) {
-            throw new Error(`Failed to upload ${file.name}`)
+          if (file.file) {
+            // Original file
+            formData.append('file', file.file)
+          } else {
+            // Data URL - convert to blob
+            const response = await fetch(file.url)
+            const blob = await response.blob()
+            const uploadFile = new File([blob], file.name, { type: blob.type })
+            formData.append('file', uploadFile)
           }
 
-          const result = await response.json()
-          console.log('Uploaded:', result)
-        } else {
-          // Handle URL-based images - convert data URL to blob
-          const response = await fetch(file.url)
-          const blob = await response.blob()
-          const uploadFile = new File([blob], file.name, { type: blob.type })
-
-          const formData = new FormData()
-          formData.append('file', uploadFile)
           formData.append('sessionId', sessionId)
           formData.append('sellerId', sellerId)
+          formData.append('hash', file.hash || '')
+          formData.append('index', String(file.index))
 
-          const uploadResponse = await fetch(`${API_BASE}/files/upload`, {
+          const uploadUrl = `${API_BASE}/files/upload`
+          const uploadResponse = await fetch(uploadUrl, {
             method: 'POST',
             body: formData
           })
 
           if (!uploadResponse.ok) {
-            throw new Error(`Failed to upload ${file.name}`)
-          }
+            const errorText = await uploadResponse.text()
+            let errorBody
+            let errorMessage = errorText
 
-          const result = await uploadResponse.json()
-          console.log('Uploaded:', result)
-        }
+            try {
+              errorBody = JSON.parse(errorText)
+              errorMessage = errorBody.error || errorBody.message || errorText
+            } catch {
+              // If not JSON, try to extract error from HTML
+              const preMatch = errorText.match(/<pre>(.+?)<\/pre>/s)
+              if (preMatch) {
+                errorMessage = preMatch[1].trim()
+              } else {
+                errorMessage = errorText
+              }
+            }
+
+            const errorMsg = `Upload failed for "${file.name}" [${uploadResponse.status} ${uploadResponse.statusText}]: ${errorMessage}`
+            console.error('Upload error:', {
+              url: uploadUrl,
+              file: file.name,
+              status: uploadResponse.status,
+              statusText: uploadResponse.statusText,
+              body: errorText
+            })
+            throw new Error(errorMsg)
+          }
+        }))
       }
 
-      // 2. Delete files from session folder
+      // Step 3: Delete files from session folder
+      const deletedCount = deletedFileNames.length
       for (const fileName of deletedFileNames) {
-        const response = await fetch(`${API_BASE}/files/${sellerId}/${sessionId}/${fileName}`, {
+        const deleteUrl = `${API_BASE}/files/${sellerId}/${sessionId}/${fileName}`
+        const response = await fetch(deleteUrl, {
           method: 'DELETE'
         })
 
         if (!response.ok) {
-          throw new Error(`Failed to delete ${fileName}`)
+          console.warn(`Failed to delete ${fileName}:`, {
+            url: deleteUrl,
+            status: response.status,
+            statusText: response.statusText
+          })
         }
-
-        const result = await response.json()
-        console.log('Deleted:', result)
       }
 
       // After successful save, update state
       setMockupFiles(prev => prev.map(file => ({ ...file, isFromDatabase: true })))
       setDeletedFileNames([])
 
-      alert('Changes saved successfully!\n\n' +
-            'New files uploaded: ' + newFiles.length + '\n' +
-            'Files deleted: ' + deletedFileNames.length)
+      // Show result toast
+      const messages = []
+      if (uploadedCount > 0) messages.push(`Saved ${uploadedCount}`)
+      if (skippedCount > 0) messages.push(`Skipped (duplicates) ${skippedCount}`)
+      if (deletedCount > 0) messages.push(`Deleted ${deletedCount}`)
+
+      toast.success(messages.length > 0 ? messages.join(' · ') : 'No changes to save')
       setIsSaving(false)
     } catch (error) {
-      console.error('Save error:', error)
-      alert('Error saving files: ' + (error as Error).message + '\n\nMake sure the server is running: npm run server')
+      const errorMessage = (error as Error).message
+      console.error('Save operation failed:', {
+        error,
+        message: errorMessage,
+        stack: (error as Error).stack
+      })
+
+      // Show error toast with longer duration and server hint
+      const fullErrorMessage = `${errorMessage}\n\nMake sure the server is running: npm run server`
+      toast.error(fullErrorMessage, 8000)
       setIsSaving(false)
     }
   }
@@ -2327,13 +2371,12 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
           <div className="space-y-4">
             {/* Action Buttons Row */}
             <div className="grid grid-cols-2 gap-3">
-              {/* Show Mockup Button */}
+              {/* Show Mockup Button - Opens modal with load/add options */}
               <button
-                onClick={loadSellerMockups}
-                disabled={isLoadingFiles}
-                className="bg-cyan-600 hover:bg-cyan-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold py-3 px-4 rounded transition text-sm"
+                onClick={handleShowMockup}
+                className="bg-cyan-600 hover:bg-cyan-700 text-white font-semibold py-3 px-4 rounded transition text-sm"
               >
-                {isLoadingFiles ? 'Loading...' : `Show Mockup`}
+                Show Mockup
               </button>
 
               {/* Save Changes Button */}
@@ -2938,6 +2981,15 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
             setCanvasRefreshKey(prev => prev + 1)
           }}
           onClose={() => setExpandedTransformOpen(false)}
+        />
+      )}
+
+      {/* Mockup Modal */}
+      {showMockupModal && (
+        <MockupModal
+          mockupFiles={mockupFiles}
+          onClose={handleModalClose}
+          onNext={handleModalNext}
         />
       )}
     </div>

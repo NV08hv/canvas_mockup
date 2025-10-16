@@ -268,6 +268,57 @@ app.get('/api/files/:sellerId/:sessionId', (req, res) => {
   }
 })
 
+// Check which hashes are unknown (need upload)
+app.post('/api/files/check-hashes', (req, res) => {
+  try {
+    const { sellerId, sessionId, files } = req.body
+
+    if (!sessionId || !sellerId || !files || !Array.isArray(files)) {
+      return res.status(400).json({ error: 'Invalid request' })
+    }
+
+    const session = sessions.get(sessionId)
+    if (!session || session.sellerId !== sellerId) {
+      return res.status(404).json({ error: 'Session not found' })
+    }
+
+    updateSessionActivity(sessionId)
+
+    const sessionDir = path.join(TMP_DIR, sellerId, sessionId)
+    const hashIndexFile = path.join(sessionDir, '.hash-index.json')
+
+    // Load existing hash index
+    let hashIndex = {}
+    if (fs.existsSync(hashIndexFile)) {
+      try {
+        hashIndex = JSON.parse(fs.readFileSync(hashIndexFile, 'utf-8'))
+      } catch (error) {
+        console.error('Error reading hash index:', error)
+      }
+    }
+
+    // Check which hashes are unknown
+    const unknownHashes = []
+    let skippedCount = 0
+
+    files.forEach(file => {
+      if (file.hash && !hashIndex[file.hash]) {
+        unknownHashes.push(file.hash)
+      } else if (file.hash && hashIndex[file.hash]) {
+        skippedCount++
+      }
+    })
+
+    res.json({
+      unknownHashes,
+      skippedCount
+    })
+  } catch (error) {
+    console.error('Error checking hashes:', error)
+    res.status(500).json({ error: 'Failed to check hashes' })
+  }
+})
+
 // Upload file to session
 app.post('/api/files/upload', tempUpload.single('file'), (req, res) => {
   try {
@@ -275,7 +326,7 @@ app.post('/api/files/upload', tempUpload.single('file'), (req, res) => {
       return res.status(400).json({ error: 'No file uploaded' })
     }
 
-    const { sellerId, sessionId } = req.body
+    const { sellerId, sessionId, hash, index } = req.body
 
     if (!sessionId || !sellerId) {
       // Clean up uploaded file
@@ -296,6 +347,29 @@ app.post('/api/files/upload', tempUpload.single('file'), (req, res) => {
       fs.mkdirSync(sessionDir, { recursive: true })
     }
 
+    const hashIndexFile = path.join(sessionDir, '.hash-index.json')
+
+    // Load existing hash index
+    let hashIndex = {}
+    if (fs.existsSync(hashIndexFile)) {
+      try {
+        hashIndex = JSON.parse(fs.readFileSync(hashIndexFile, 'utf-8'))
+      } catch (error) {
+        console.error('Error reading hash index:', error)
+      }
+    }
+
+    // Check if hash already exists (duplicate detection)
+    if (hash && hashIndex[hash]) {
+      // File with same hash already exists, skip upload
+      fs.unlinkSync(req.file.path)
+      return res.json({
+        message: 'File already exists (duplicate)',
+        file: hashIndex[hash],
+        duplicate: true
+      })
+    }
+
     // Move file from temp to session directory with proper name
     const timestamp = Date.now()
     const ext = path.extname(req.file.originalname)
@@ -305,13 +379,25 @@ app.post('/api/files/upload', tempUpload.single('file'), (req, res) => {
 
     fs.renameSync(req.file.path, finalPath)
 
+    // Update hash index
+    if (hash) {
+      hashIndex[hash] = {
+        name: newFilename,
+        size: req.file.size,
+        index: index || 0,
+        uploadedAt: new Date().toISOString()
+      }
+      fs.writeFileSync(hashIndexFile, JSON.stringify(hashIndex, null, 2))
+    }
+
     updateSessionActivity(sessionId)
 
     res.json({
       message: 'File uploaded successfully',
       file: {
         name: newFilename,
-        size: req.file.size
+        size: req.file.size,
+        hash
       }
     })
   } catch (error) {

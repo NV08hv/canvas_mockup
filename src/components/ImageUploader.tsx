@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react'
+import { computeImageHash, computeFileHash } from '../utils/imageHash'
 
 export interface ImageFile {
   id: string
@@ -8,6 +9,8 @@ export interface ImageFile {
   file?: File
   index?: number // Track the index for database synchronization
   isFromDatabase?: boolean // Track if this file came from the database
+  hash?: string // SHA-256 hash for deduplication
+  size?: number // File size in bytes
 }
 
 interface ImageUploaderProps {
@@ -56,24 +59,31 @@ function ImageUploader({ onImagesLoaded, accept = 'image/*', label = 'Upload Ima
     for (const file of fileArray) {
       const reader = new FileReader()
 
-      await new Promise<void>((resolve) => {
+      const dataUrl = await new Promise<string>((resolve) => {
         reader.onload = (e) => {
-          const url = e.target?.result as string
-          newImageFiles.push({
-            id: generateId(),
-            url,
-            name: file.name,
-            source,
-            file,
-            index: currentIndex,
-            isFromDatabase: false,
-          })
-          currentIndex++
-          resolve()
+          resolve(e.target?.result as string)
         }
-        reader.onerror = () => resolve()
+        reader.onerror = () => resolve('')
         reader.readAsDataURL(file)
       })
+
+      if (dataUrl) {
+        // Compute hash from file
+        const hash = await computeFileHash(file)
+
+        newImageFiles.push({
+          id: generateId(),
+          url: dataUrl,
+          name: file.name,
+          source,
+          file,
+          index: currentIndex,
+          isFromDatabase: false,
+          hash,
+          size: file.size,
+        })
+        currentIndex++
+      }
     }
 
     // Update next index for future uploads
@@ -149,6 +159,13 @@ function ImageUploader({ onImagesLoaded, accept = 'image/*', label = 'Upload Ima
         ctx.drawImage(img, 0, 0)
         const dataUrl = canvas.toDataURL('image/png')
 
+        // Compute hash from data URL
+        const hash = await computeImageHash(dataUrl)
+
+        // Estimate size from data URL
+        const base64Length = dataUrl.split(',')[1].length
+        const size = Math.ceil(base64Length * 0.75)
+
         const newImageFile: ImageFile = {
           id: generateId(),
           url: dataUrl,
@@ -156,6 +173,8 @@ function ImageUploader({ onImagesLoaded, accept = 'image/*', label = 'Upload Ima
           source: 'url',
           index: nextIndex,
           isFromDatabase: false,
+          hash,
+          size,
         }
 
         setNextIndex(nextIndex + 1)
