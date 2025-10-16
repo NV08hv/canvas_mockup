@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import JSZip from 'jszip'
 import ImageUploader, { ImageFile } from './ImageUploader'
 import MockupModal from './MockupModal'
-import { useToast } from './Toast'
+import { useToast, ToastType } from './Toast'
 
 interface Transform {
   x: number
@@ -1569,29 +1569,54 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
 
   // Handle mockup images loaded from ImageUploader
   const handleMockupImagesLoaded = (images: HTMLImageElement[], files: ImageFile[]) => {
-    // Merge with existing files (don't replace)
-    const existingFiles = [...mockupFiles]
-    const existingImages = [...mockupImages]
+    // Merge by SHA-256 hash (drop duplicates)
+    const existingHashMap = new Map<string, { file: ImageFile; image: HTMLImageElement }>()
+
+    // Build map of existing files by hash
+    mockupFiles.forEach((file, idx) => {
+      existingHashMap.set(file.sha256, { file, image: mockupImages[idx] })
+    })
 
     // Calculate next index based on existing files
-    const maxIndex = existingFiles.length > 0
-      ? Math.max(...existingFiles.map(f => f.index ?? -1))
+    const maxIndex = mockupFiles.length > 0
+      ? Math.max(...mockupFiles.map(f => f.index ?? -1))
       : -1
 
-    // Update indices for new files
-    const updatedFiles = files.map((file, idx) => ({
-      ...file,
-      index: maxIndex + 1 + idx,
-      isFromDatabase: false
-    }))
+    // Filter out duplicates and update indices for new files
+    const newFiles: ImageFile[] = []
+    const newImages: HTMLImageElement[] = []
+    let nextIndex = maxIndex + 1
 
-    setMockupFiles([...existingFiles, ...updatedFiles])
-    setMockupImages([...existingImages, ...images])
+    files.forEach((file, idx) => {
+      // Skip if hash already exists
+      if (existingHashMap.has(file.sha256)) {
+        console.log(`Skipping duplicate file: ${file.name} (hash: ${file.sha256.substring(0, 8)}...)`)
+        return
+      }
+
+      newFiles.push({
+        ...file,
+        index: nextIndex,
+        isFromDatabase: false
+      })
+      newImages.push(images[idx])
+      nextIndex++
+    })
+
+    // Show toast if duplicates were found
+    const duplicateCount = files.length - newFiles.length
+    if (duplicateCount > 0) {
+      toast.info(`Skipped ${duplicateCount} duplicate file${duplicateCount !== 1 ? 's' : ''}`)
+    }
+
+    // Merge new files with existing
+    setMockupFiles([...mockupFiles, ...newFiles])
+    setMockupImages([...mockupImages, ...newImages])
 
     // If this is the first upload, select the first image
-    if (existingImages.length === 0 && images.length > 0) {
+    if (mockupImages.length === 0 && newImages.length > 0) {
       setSelectedMockupIndex(0)
-      setMockupImage(images[0])
+      setMockupImage(newImages[0])
     }
   }
 
@@ -1852,20 +1877,34 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
     setCanvasRefreshKey(prev => prev + 1)
   }
 
-  // Delete all mockup images
-  const deleteAllMockups = () => {
-    // Collect names of files that exist in the database for deletion on save
-    const dbFileNamesToDelete = mockupFiles
-      .filter(file => file && file.isFromDatabase)
-      .map(file => file.name)
+  // Delete all mockup images (hard reset - no rehydration)
+  const deleteAllMockups = async () => {
+    try {
+      // Call server to clear manifest and hash index immediately
+      const response = await fetch(`${API_BASE}/files/clear`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          sellerId
+        })
+      })
 
-    if (dbFileNamesToDelete.length > 0) {
-      setDeletedFileNames(prev => [...prev, ...dbFileNamesToDelete])
+      if (!response.ok) {
+        console.error('Failed to clear server files:', response.status)
+        // Continue anyway with client reset
+      }
+    } catch (error) {
+      console.error('Error clearing server files:', error)
+      // Continue anyway with client reset
     }
 
-    // Clear mockup images and files
+    // HARD RESET: Clear all state completely
     setMockupImages([])
     setMockupFiles([])
+    setSelectedMockupIndex(0)
+    setMockupImage(null)
+    setDeletedFileNames([])
 
     // Reset per-mockup custom settings and offsets
     setMockupCustomTransforms1(new Map())
@@ -2131,159 +2170,191 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
     }
   }
 
-  // Save changes to local public folder (seller-specific)
+  // Optimized save with non-blocking progress toasts, Cancel, and Retry
   const handleSave = async () => {
     setIsSaving(true)
-    setSaveError(null) // Clear previous errors
-
-    // Get newly uploaded files (not from database)
-    const newFiles = mockupFiles.filter(file => !file.isFromDatabase)
+    let cancelRequested = false
+    let progressToastId: string | null = null
+    let filesToUpload: ImageFile[] = []
+    let uploadedCount = 0
+    let failedCount = 0
 
     try {
-      // Step 1: Send metadata with hashes to check for duplicates
-      const metadata = newFiles.map(file => ({
-        hash: file.hash,
-        name: file.name,
-        size: file.size || 0,
-        index: file.index
-      }))
+      // Step 1: Diff - determine what needs to be uploaded
+      const allHashes = mockupFiles.map(file => file.sha256)
 
-      const checkUrl = `${API_BASE}/files/check-hashes`
-      console.log('Checking hashes:', checkUrl, metadata)
-
-      const checkResponse = await fetch(checkUrl, {
+      const diffResponse = await fetch(`${API_BASE}/files/diff`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sessionId,
           sellerId,
-          files: metadata
+          hashes: allHashes
         })
       })
 
-      if (!checkResponse.ok) {
-        const errorText = await checkResponse.text()
-        let errorBody
-        let errorMessage = errorText
-
-        try {
-          errorBody = JSON.parse(errorText)
-          errorMessage = errorBody.error || errorBody.message || errorText
-        } catch {
-          // If not JSON, try to extract error from HTML
-          const preMatch = errorText.match(/<pre>(.+?)<\/pre>/s)
-          if (preMatch) {
-            errorMessage = preMatch[1].trim()
-          } else {
-            errorMessage = errorText
-          }
-        }
-
-        const errorMsg = `Check hashes failed [${checkResponse.status} ${checkResponse.statusText}]: ${errorMessage}`
-        console.error('Check hashes error:', {
-          url: checkUrl,
-          status: checkResponse.status,
-          statusText: checkResponse.statusText,
-          body: errorText
-        })
-        throw new Error(errorMsg)
+      if (!diffResponse.ok) {
+        throw new Error(`Diff check failed: ${diffResponse.status} ${diffResponse.statusText}`)
       }
 
-      const checkResult = await checkResponse.json()
-      const { unknownHashes, skippedCount } = checkResult
+      const { missing_hashes } = await diffResponse.json()
+      console.log(`Diff complete: ${missing_hashes.length} files need upload`)
 
-      // Step 2: Upload only files with unknown hashes (parallel, max 4 at a time)
-      const filesToUpload = newFiles.filter(file => unknownHashes.includes(file.hash))
-      const uploadedCount = filesToUpload.length
+      // Step 2: Upload missing files with progress tracking
+      filesToUpload = mockupFiles.filter(file => missing_hashes.includes(file.sha256))
+      const CONCURRENCY = 8
 
-      // Parallel uploads with concurrency limit
-      const CONCURRENCY = 4
-      for (let i = 0; i < filesToUpload.length; i += CONCURRENCY) {
-        const batch = filesToUpload.slice(i, i + CONCURRENCY)
-        await Promise.all(batch.map(async (file) => {
-          const formData = new FormData()
-
-          if (file.file) {
-            // Original file
-            formData.append('file', file.file)
-          } else {
-            // Data URL - convert to blob
-            const response = await fetch(file.url)
-            const blob = await response.blob()
-            const uploadFile = new File([blob], file.name, { type: blob.type })
-            formData.append('file', uploadFile)
-          }
-
-          formData.append('sessionId', sessionId)
-          formData.append('sellerId', sellerId)
-          formData.append('hash', file.hash || '')
-          formData.append('index', String(file.index))
-
-          const uploadUrl = `${API_BASE}/files/upload`
-          const uploadResponse = await fetch(uploadUrl, {
-            method: 'POST',
-            body: formData
-          })
-
-          if (!uploadResponse.ok) {
-            const errorText = await uploadResponse.text()
-            let errorBody
-            let errorMessage = errorText
-
-            try {
-              errorBody = JSON.parse(errorText)
-              errorMessage = errorBody.error || errorBody.message || errorText
-            } catch {
-              // If not JSON, try to extract error from HTML
-              const preMatch = errorText.match(/<pre>(.+?)<\/pre>/s)
-              if (preMatch) {
-                errorMessage = preMatch[1].trim()
-              } else {
-                errorMessage = errorText
+      if (filesToUpload.length > 0) {
+        // Show loading toast with progress and Cancel button
+        progressToastId = toast.showAdvancedToast({
+          type: 'loading',
+          message: `Uploading ${filesToUpload.length} file${filesToUpload.length !== 1 ? 's' : ''}...`,
+          duration: 0, // Don't auto-dismiss
+          progress: 0,
+          actions: [
+            {
+              label: 'Cancel',
+              onClick: () => {
+                cancelRequested = true
+                if (progressToastId) {
+                  toast.updateToast(progressToastId, {
+                    type: 'info',
+                    message: 'Upload cancelled',
+                    duration: 3000,
+                    progress: undefined,
+                    actions: []
+                  })
+                }
               }
             }
-
-            const errorMsg = `Upload failed for "${file.name}" [${uploadResponse.status} ${uploadResponse.statusText}]: ${errorMessage}`
-            console.error('Upload error:', {
-              url: uploadUrl,
-              file: file.name,
-              status: uploadResponse.status,
-              statusText: uploadResponse.statusText,
-              body: errorText
-            })
-            throw new Error(errorMsg)
-          }
-        }))
-      }
-
-      // Step 3: Delete files from session folder
-      const deletedCount = deletedFileNames.length
-      for (const fileName of deletedFileNames) {
-        const deleteUrl = `${API_BASE}/files/${sellerId}/${sessionId}/${fileName}`
-        const response = await fetch(deleteUrl, {
-          method: 'DELETE'
+          ]
         })
 
-        if (!response.ok) {
-          console.warn(`Failed to delete ${fileName}:`, {
-            url: deleteUrl,
-            status: response.status,
-            statusText: response.statusText
+        const uploadPromises = []
+
+        for (let i = 0; i < filesToUpload.length; i += CONCURRENCY) {
+          if (cancelRequested) break
+
+          const batch = filesToUpload.slice(i, i + CONCURRENCY)
+          const batchPromises = batch.map(async (file) => {
+            if (cancelRequested) return { success: false, cancelled: true }
+
+            try {
+              const formData = new FormData()
+              formData.append('file', file.file)
+              formData.append('sessionId', sessionId)
+              formData.append('sellerId', sellerId)
+              formData.append('sha256', file.sha256)
+              formData.append('ext', file.ext)
+
+              const response = await fetch(`${API_BASE}/files/upload`, {
+                method: 'POST',
+                body: formData
+              })
+
+              if (!response.ok) {
+                failedCount++
+                console.error(`Upload failed for ${file.name}: ${response.status}`)
+                return { success: false, error: response.status }
+              }
+
+              uploadedCount++
+              // Update progress
+              if (progressToastId && !cancelRequested) {
+                const progress = Math.round((uploadedCount / filesToUpload.length) * 100)
+                toast.updateToast(progressToastId, {
+                  progress,
+                  message: `Uploading ${filesToUpload.length} file${filesToUpload.length !== 1 ? 's' : ''}... (${uploadedCount}/${filesToUpload.length})`
+                })
+              }
+
+              return { success: true, data: await response.json() }
+            } catch (error) {
+              failedCount++
+              console.error(`Upload error for ${file.name}:`, error)
+              return { success: false, error }
+            }
           })
+
+          uploadPromises.push(...batchPromises)
+
+          // Wait for current batch to complete before starting next
+          if (i + CONCURRENCY < filesToUpload.length) {
+            await Promise.all(batchPromises)
+          }
+        }
+
+        await Promise.all(uploadPromises)
+
+        if (cancelRequested) {
+          setIsSaving(false)
+          return
+        }
+
+        // Dismiss loading toast
+        if (progressToastId) {
+          toast.dismissToast(progressToastId)
         }
       }
 
-      // After successful save, update state
+      // Step 3: Commit - atomically update manifest
+      // IMPORTANT: The server replaces the entire manifest with "kept" array
+      // So we just send current mockupFiles - the server will remove anything not in this list
+      const kept = mockupFiles.map(file => file.sha256)
+      const mapping = mockupFiles.map(file => ({
+        displayName: file.name,
+        sha256: file.sha256,
+        ext: file.ext
+      }))
+
+      // Deleted hashes are not actually needed - the commit endpoint replaces the manifest entirely
+      // But we send them anyway for reference counting / garbage collection
+      const deletedHashes: string[] = []
+
+      const commitResponse = await fetch(`${API_BASE}/files/commit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          sellerId,
+          kept,
+          deleted: deletedHashes,
+          mapping
+        })
+      })
+
+      if (!commitResponse.ok) {
+        throw new Error(`Commit failed: ${commitResponse.status} ${commitResponse.statusText}`)
+      }
+
+      await commitResponse.json()
+
+      // Update UI state
       setMockupFiles(prev => prev.map(file => ({ ...file, isFromDatabase: true })))
       setDeletedFileNames([])
 
-      // Show result toast
-      const messages = []
-      if (uploadedCount > 0) messages.push(`Saved ${uploadedCount}`)
-      if (skippedCount > 0) messages.push(`Skipped (duplicates) ${skippedCount}`)
-      if (deletedCount > 0) messages.push(`Deleted ${deletedCount}`)
+      // Show success toast - only show number of files actually uploaded
+      let message: string
+      let toastType: ToastType = 'success'
 
-      toast.success(messages.length > 0 ? messages.join(' · ') : 'No changes to save')
+      if (uploadedCount === 0 && failedCount === 0) {
+        message = 'No new files to save.'
+      } else if (failedCount > 0) {
+        // Partial errors
+        message = `Saved ${uploadedCount} file${uploadedCount !== 1 ? 's' : ''}, ${failedCount} failed.`
+        toastType = 'error'
+      } else {
+        // All successful
+        message = `Saved ${uploadedCount} file${uploadedCount !== 1 ? 's' : ''} successfully.`
+      }
+
+      toast.showAdvancedToast({
+        type: toastType,
+        message,
+        duration: 3000,
+        actions: []
+      })
+
       setIsSaving(false)
     } catch (error) {
       const errorMessage = (error as Error).message
@@ -2293,9 +2364,32 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
         stack: (error as Error).stack
       })
 
-      // Show error toast with longer duration and server hint
-      const fullErrorMessage = `${errorMessage}\n\nMake sure the server is running: npm run server`
-      toast.error(fullErrorMessage, 8000)
+      // Dismiss progress toast if still showing
+      if (progressToastId) {
+        toast.dismissToast(progressToastId)
+      }
+
+      // Show error toast with Retry action
+      toast.showAdvancedToast({
+        type: 'error',
+        message: `Upload failed: ${errorMessage}`,
+        duration: 0, // Don't auto-dismiss
+        actions: [
+          {
+            label: 'Retry',
+            onClick: () => {
+              handleSave() // Retry the save operation
+            }
+          },
+          {
+            label: 'Dismiss',
+            onClick: () => {
+              // Just dismiss
+            }
+          }
+        ]
+      })
+
       setIsSaving(false)
     }
   }
@@ -2657,9 +2751,39 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
                 <button
                   onClick={() => {
                     if (mockupImages.length === 0) return
-                    if (confirm('Delete ALL mockups? This will mark saved files for deletion and clear the list.')) {
-                      deleteAllMockups()
+                    // Non-blocking toast with Undo action
+                    const count = mockupImages.length
+                    const previousState = {
+                      mockupFiles: [...mockupFiles],
+                      mockupImages: [...mockupImages],
+                      deletedFileNames: [...deletedFileNames],
+                      selectedMockupIndex
                     }
+
+                    // Delete immediately
+                    deleteAllMockups()
+
+                    // Show toast with Undo action (30s)
+                    toast.showAdvancedToast({
+                      type: 'info',
+                      message: `Deleted ${count} mockup${count !== 1 ? 's' : ''}`,
+                      duration: 30000,
+                      actions: [
+                        {
+                          label: 'Undo',
+                          onClick: () => {
+                            setMockupFiles(previousState.mockupFiles)
+                            setMockupImages(previousState.mockupImages)
+                            setDeletedFileNames(previousState.deletedFileNames)
+                            setSelectedMockupIndex(previousState.selectedMockupIndex)
+                            if (previousState.mockupImages.length > 0) {
+                              setMockupImage(previousState.mockupImages[previousState.selectedMockupIndex])
+                            }
+                            toast.success('Deletion undone')
+                          }
+                        }
+                      ]
+                    })
                   }}
                   className="w-full bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded transition disabled:bg-gray-600 disabled:cursor-not-allowed"
                   disabled={mockupImages.length === 0}
@@ -2861,9 +2985,45 @@ function MockupCanvas({ sessionId, sellerId }: MockupCanvasProps) {
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
-                            if (confirm(`Delete Mockup ${index + 1}?`)) {
-                              deleteMockup(index)
+                            // Non-blocking toast with Undo action
+                            const deletedMockup = {
+                              file: mockupFiles[index],
+                              image: mockupImages[index],
+                              index
                             }
+
+                            // Delete immediately
+                            deleteMockup(index)
+
+                            // Show toast with Undo action (30s)
+                            toast.showAdvancedToast({
+                              type: 'info',
+                              message: `Deleted mockup ${index + 1}`,
+                              duration: 30000,
+                              actions: [
+                                {
+                                  label: 'Undo',
+                                  onClick: () => {
+                                    // Restore the deleted mockup
+                                    setMockupFiles(prev => {
+                                      const newFiles = [...prev]
+                                      newFiles.splice(deletedMockup.index, 0, deletedMockup.file)
+                                      return newFiles
+                                    })
+                                    setMockupImages(prev => {
+                                      const newImages = [...prev]
+                                      newImages.splice(deletedMockup.index, 0, deletedMockup.image)
+                                      return newImages
+                                    })
+                                    // Remove from deleted list if it was saved
+                                    if (deletedMockup.file.isFromDatabase) {
+                                      setDeletedFileNames(prev => prev.filter(name => name !== deletedMockup.file.name))
+                                    }
+                                    toast.success('Deletion undone')
+                                  }
+                                }
+                              ]
+                            })
                           }}
                           className="px-3 text-xs py-2 rounded transition bg-red-600 hover:bg-red-700 text-white"
                           title="Delete mockup"

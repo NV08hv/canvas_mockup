@@ -1,16 +1,18 @@
 import { useState, useRef } from 'react'
-import { computeImageHash, computeFileHash } from '../utils/imageHash'
+import { computeFileHash } from '../utils/imageHash'
 
 export interface ImageFile {
   id: string
-  url: string
+  url: string // Object URL for preview (will be revoked on cleanup)
   name: string
   source: 'file' | 'folder' | 'url'
-  file?: File
+  file: File // Always keep the original File object
   index?: number // Track the index for database synchronization
   isFromDatabase?: boolean // Track if this file came from the database
-  hash?: string // SHA-256 hash for deduplication
-  size?: number // File size in bytes
+  sha256: string // SHA-256 hash for content-addressed storage
+  size: number // File size in bytes
+  type: string // MIME type
+  ext: string // File extension (e.g., '.png', '.jpg')
 }
 
 interface ImageUploaderProps {
@@ -57,33 +59,29 @@ function ImageUploader({ onImagesLoaded, accept = 'image/*', label = 'Upload Ima
     let currentIndex = nextIndex
 
     for (const file of fileArray) {
-      const reader = new FileReader()
+      // Create object URL for preview (memory efficient)
+      const objectUrl = URL.createObjectURL(file)
 
-      const dataUrl = await new Promise<string>((resolve) => {
-        reader.onload = (e) => {
-          resolve(e.target?.result as string)
-        }
-        reader.onerror = () => resolve('')
-        reader.readAsDataURL(file)
+      // Compute SHA-256 hash from file
+      const sha256 = await computeFileHash(file)
+
+      // Extract file extension
+      const ext = file.name.substring(file.name.lastIndexOf('.'))
+
+      newImageFiles.push({
+        id: generateId(),
+        url: objectUrl,
+        name: file.name,
+        source,
+        file, // Keep original File object
+        index: currentIndex,
+        isFromDatabase: false,
+        sha256,
+        size: file.size,
+        type: file.type,
+        ext,
       })
-
-      if (dataUrl) {
-        // Compute hash from file
-        const hash = await computeFileHash(file)
-
-        newImageFiles.push({
-          id: generateId(),
-          url: dataUrl,
-          name: file.name,
-          source,
-          file,
-          index: currentIndex,
-          isFromDatabase: false,
-          hash,
-          size: file.size,
-        })
-        currentIndex++
-      }
+      currentIndex++
     }
 
     // Update next index for future uploads
@@ -147,45 +145,47 @@ function ImageUploader({ onImagesLoaded, accept = 'image/*', label = 'Upload Ima
     setUrlError('')
 
     try {
-      // Try to load the image
-      const img = await loadImageFromUrl(urlInput)
-
-      // Create a canvas to convert the image to a data URL
-      const canvas = document.createElement('canvas')
-      canvas.width = img.width
-      canvas.height = img.height
-      const ctx = canvas.getContext('2d')
-      if (ctx) {
-        ctx.drawImage(img, 0, 0)
-        const dataUrl = canvas.toDataURL('image/png')
-
-        // Compute hash from data URL
-        const hash = await computeImageHash(dataUrl)
-
-        // Estimate size from data URL
-        const base64Length = dataUrl.split(',')[1].length
-        const size = Math.ceil(base64Length * 0.75)
-
-        const newImageFile: ImageFile = {
-          id: generateId(),
-          url: dataUrl,
-          name: urlInput.split('/').pop() || 'url-image.png',
-          source: 'url',
-          index: nextIndex,
-          isFromDatabase: false,
-          hash,
-          size,
-        }
-
-        setNextIndex(nextIndex + 1)
-
-        const updatedFiles = [...imageFiles, newImageFile]
-        setImageFiles(updatedFiles)
-        setUrlInput('')
-
-        // Update parent
-        await updateParentImages(updatedFiles)
+      // Fetch the image and convert to File object
+      const response = await fetch(urlInput)
+      if (!response.ok) {
+        throw new Error('Failed to fetch image')
       }
+
+      const blob = await response.blob()
+      const filename = urlInput.split('/').pop() || 'url-image.png'
+      const file = new File([blob], filename, { type: blob.type || 'image/png' })
+
+      // Create object URL for preview
+      const objectUrl = URL.createObjectURL(file)
+
+      // Compute SHA-256 hash from file
+      const sha256 = await computeFileHash(file)
+
+      // Extract file extension
+      const ext = filename.substring(filename.lastIndexOf('.')) || '.png'
+
+      const newImageFile: ImageFile = {
+        id: generateId(),
+        url: objectUrl,
+        name: filename,
+        source: 'url',
+        file, // Keep File object
+        index: nextIndex,
+        isFromDatabase: false,
+        sha256,
+        size: file.size,
+        type: file.type,
+        ext,
+      }
+
+      setNextIndex(nextIndex + 1)
+
+      const updatedFiles = [...imageFiles, newImageFile]
+      setImageFiles(updatedFiles)
+      setUrlInput('')
+
+      // Update parent
+      await updateParentImages(updatedFiles)
     } catch (error) {
       setUrlError('Failed to load image from URL. Make sure the URL is valid and CORS is enabled.')
       console.error('URL load error:', error)

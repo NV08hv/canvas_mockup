@@ -268,7 +268,49 @@ app.get('/api/files/:sellerId/:sessionId', (req, res) => {
   }
 })
 
-// Check which hashes are unknown (need upload)
+// Check which hashes are missing (need upload) - new endpoint for diff check
+app.post('/api/files/diff', (req, res) => {
+  try {
+    const { sellerId, sessionId, hashes } = req.body
+
+    if (!sessionId || !sellerId || !hashes || !Array.isArray(hashes)) {
+      return res.status(400).json({ error: 'Invalid request' })
+    }
+
+    const session = sessions.get(sessionId)
+    if (!session || session.sellerId !== sellerId) {
+      return res.status(404).json({ error: 'Session not found' })
+    }
+
+    updateSessionActivity(sessionId)
+
+    const sessionDir = path.join(TMP_DIR, sellerId, sessionId)
+    const hashIndexFile = path.join(sessionDir, '.hash-index.json')
+
+    // Load existing hash index
+    let hashIndex = {}
+    if (fs.existsSync(hashIndexFile)) {
+      try {
+        hashIndex = JSON.parse(fs.readFileSync(hashIndexFile, 'utf-8'))
+      } catch (error) {
+        console.error('Error reading hash index:', error)
+      }
+    }
+
+    // Check which hashes are missing
+    const missing_hashes = hashes.filter(hash => !hashIndex[hash])
+
+    res.json({
+      missing_hashes,
+      existing_count: hashes.length - missing_hashes.length
+    })
+  } catch (error) {
+    console.error('Error checking hashes:', error)
+    res.status(500).json({ error: 'Failed to check hashes' })
+  }
+})
+
+// Check which hashes are unknown (need upload) - legacy endpoint
 app.post('/api/files/check-hashes', (req, res) => {
   try {
     const { sellerId, sessionId, files } = req.body
@@ -319,6 +361,138 @@ app.post('/api/files/check-hashes', (req, res) => {
   }
 })
 
+// Clear/reset all files for a session (for Delete All)
+app.post('/api/files/clear', (req, res) => {
+  try {
+    const { sellerId, sessionId } = req.body
+
+    if (!sessionId || !sellerId) {
+      return res.status(400).json({ error: 'Session ID and Seller ID are required' })
+    }
+
+    const session = sessions.get(sessionId)
+    if (!session || session.sellerId !== sellerId) {
+      return res.status(404).json({ error: 'Session not found' })
+    }
+
+    updateSessionActivity(sessionId)
+
+    const sessionDir = path.join(TMP_DIR, sellerId, sessionId)
+    const hashIndexFile = path.join(sessionDir, '.hash-index.json')
+    const manifestFile = path.join(sessionDir, 'manifest.json')
+
+    // Clear hash index
+    if (fs.existsSync(hashIndexFile)) {
+      fs.writeFileSync(hashIndexFile, JSON.stringify({}, null, 2))
+    }
+
+    // Clear manifest
+    if (fs.existsSync(manifestFile)) {
+      fs.writeFileSync(manifestFile, JSON.stringify({ files: [], updated_at: new Date().toISOString() }, null, 2))
+    }
+
+    // Delete all files in session directory (except index and manifest)
+    if (fs.existsSync(sessionDir)) {
+      const files = fs.readdirSync(sessionDir)
+      files.forEach(file => {
+        if (file !== '.hash-index.json' && file !== 'manifest.json') {
+          const filePath = path.join(sessionDir, file)
+          if (fs.statSync(filePath).isFile()) {
+            fs.unlinkSync(filePath)
+          }
+        }
+      })
+    }
+
+    console.log(`Cleared all files for session ${sessionId}`)
+
+    res.json({ message: 'All files cleared successfully' })
+  } catch (error) {
+    console.error('Error clearing files:', error)
+    res.status(500).json({ error: 'Failed to clear files' })
+  }
+})
+
+// Commit changes - update manifest atomically
+app.post('/api/files/commit', (req, res) => {
+  try {
+    const { sellerId, sessionId, kept, deleted, mapping } = req.body
+
+    if (!sessionId || !sellerId || !kept || !Array.isArray(kept)) {
+      return res.status(400).json({ error: 'Invalid request' })
+    }
+
+    const session = sessions.get(sessionId)
+    if (!session || session.sellerId !== sellerId) {
+      return res.status(404).json({ error: 'Session not found' })
+    }
+
+    updateSessionActivity(sessionId)
+
+    const sessionDir = path.join(TMP_DIR, sellerId, sessionId)
+    const hashIndexFile = path.join(sessionDir, '.hash-index.json')
+    const manifestFile = path.join(sessionDir, 'manifest.json')
+
+    // Load existing hash index
+    let hashIndex = {}
+    if (fs.existsSync(hashIndexFile)) {
+      try {
+        hashIndex = JSON.parse(fs.readFileSync(hashIndexFile, 'utf-8'))
+      } catch (error) {
+        console.error('Error reading hash index:', error)
+      }
+    }
+
+    // Build new manifest with only kept files
+    const newManifest = {
+      files: mapping || kept.map(hash => ({
+        hash,
+        name: hashIndex[hash]?.name || '',
+        size: hashIndex[hash]?.size || 0,
+        ext: hashIndex[hash]?.ext || ''
+      })),
+      updated_at: new Date().toISOString()
+    }
+
+    // Create session directory if it doesn't exist
+    if (!fs.existsSync(sessionDir)) {
+      fs.mkdirSync(sessionDir, { recursive: true })
+    }
+
+    // Write manifest
+    fs.writeFileSync(manifestFile, JSON.stringify(newManifest, null, 2))
+
+    // Optional: Clean up deleted files (garbage collection)
+    if (deleted && Array.isArray(deleted)) {
+      deleted.forEach(hash => {
+        if (hashIndex[hash]) {
+          const filePath = path.join(sessionDir, hashIndex[hash].name)
+          if (fs.existsSync(filePath)) {
+            try {
+              fs.unlinkSync(filePath)
+              delete hashIndex[hash]
+            } catch (error) {
+              console.error(`Failed to delete file ${hash}:`, error)
+            }
+          }
+        }
+      })
+      // Update hash index after deletions
+      fs.writeFileSync(hashIndexFile, JSON.stringify(hashIndex, null, 2))
+    }
+
+    console.log(`Committed manifest for session ${sessionId}: ${kept.length} files kept`)
+
+    res.json({
+      message: 'Manifest committed successfully',
+      files_count: kept.length
+    })
+  } catch (error) {
+    console.error('Error committing manifest:', error)
+    res.status(500).json({ error: 'Failed to commit manifest' })
+  }
+})
+
 // Upload file to session
 app.post('/api/files/upload', tempUpload.single('file'), (req, res) => {
   try {
@@ -326,7 +500,9 @@ app.post('/api/files/upload', tempUpload.single('file'), (req, res) => {
       return res.status(400).json({ error: 'No file uploaded' })
     }
 
-    const { sellerId, sessionId, hash, index } = req.body
+    const { sellerId, sessionId, hash, sha256, ext, index } = req.body
+    // Support both 'hash' and 'sha256' field names
+    const fileHash = sha256 || hash
 
     if (!sessionId || !sellerId) {
       // Clean up uploaded file
@@ -360,28 +536,29 @@ app.post('/api/files/upload', tempUpload.single('file'), (req, res) => {
     }
 
     // Check if hash already exists (duplicate detection)
-    if (hash && hashIndex[hash]) {
+    if (fileHash && hashIndex[fileHash]) {
       // File with same hash already exists, skip upload
       fs.unlinkSync(req.file.path)
       return res.json({
         message: 'File already exists (duplicate)',
-        file: hashIndex[hash],
+        file: hashIndex[fileHash],
         duplicate: true
       })
     }
 
     // Move file from temp to session directory with proper name
     const timestamp = Date.now()
-    const ext = path.extname(req.file.originalname)
-    const basename = path.basename(req.file.originalname, ext)
-    const newFilename = `${basename}_${timestamp}${ext}`
+    // Use provided ext or fallback to file extension
+    const fileExt = ext || path.extname(req.file.originalname) || '.png'
+    const basename = path.basename(req.file.originalname, path.extname(req.file.originalname))
+    const newFilename = `${basename}_${timestamp}${fileExt}`
     const finalPath = path.join(sessionDir, newFilename)
 
     fs.renameSync(req.file.path, finalPath)
 
     // Update hash index
-    if (hash) {
-      hashIndex[hash] = {
+    if (fileHash) {
+      hashIndex[fileHash] = {
         name: newFilename,
         size: req.file.size,
         index: index || 0,
@@ -397,7 +574,7 @@ app.post('/api/files/upload', tempUpload.single('file'), (req, res) => {
       file: {
         name: newFilename,
         size: req.file.size,
-        hash
+        hash: fileHash
       }
     })
   } catch (error) {
@@ -437,19 +614,19 @@ app.delete('/api/files/:sellerId/:sessionId/:filename', (req, res) => {
 })
 
 // Health check endpoint
-app.get('/api/health', (req, res) => {
+app.get('/api/health', (_req, res) => {
   try {
-    res.status(200).json({ 
-      status: 'healthy', 
+    res.status(200).json({
+      status: 'healthy',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
       sessions: sessions.size
     })
   } catch (error) {
     console.error('Health check error:', error)
-    res.status(500).json({ 
-      status: 'unhealthy', 
-      error: 'Health check failed' 
+    res.status(500).json({
+      status: 'unhealthy',
+      error: 'Health check failed'
     })
   }
 })
