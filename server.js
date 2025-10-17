@@ -103,7 +103,7 @@ async function cleanupExpiredSessions() {
         const sessionDir = path.join(TMP_DIR, session.userId, sessionId)
         if (fs.existsSync(sessionDir)) {
           fs.rmSync(sessionDir, { recursive: true, force: true })
-          console.log(`Cleaned up session: ${sessionId} (user: ${session.userId})`)
+          //console.log(`Cleaned up session: ${sessionId} (user: ${session.userId})`)
         }
       }
       sessions.delete(sessionId)
@@ -171,7 +171,7 @@ app.post('/api/session/create', (req, res) => {
     sessions.set(newSessionId, session)
     scheduleSaveSessions()
 
-    console.log(`Created new session: ${newSessionId} for user: ${userId}`)
+    //console.log(`Created new session: ${newSessionId} for user: ${userId}`)
 
     res.json({
       sessionId: newSessionId,

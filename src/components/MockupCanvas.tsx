@@ -1544,9 +1544,8 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
   const [mockupCustomTransforms1, setMockupCustomTransforms1] = useState<Map<number, Transform>>(new Map())
   const [mockupCustomBlendModes1, setMockupCustomBlendModes1] = useState<Map<number, BlendMode>>(new Map())
 
-  const [mockupCustomTransforms2] = useState<Map<number, Transform>>(new Map())
-  const [mockupCustomBlendModes2] = useState<Map<number, BlendMode>>(new Map())
-  // TODO: These will be used when design selector UI is added
+  const [mockupCustomTransforms2, setMockupCustomTransforms2] = useState<Map<number, Transform>>(new Map())
+  const [mockupCustomBlendModes2, setMockupCustomBlendModes2] = useState<Map<number, BlendMode>>(new Map())
 
   // Edit mode state
   const [editMode, setEditMode] = useState<{ active: boolean; mockupIndex: number | null }>({ active: false, mockupIndex: null })
@@ -2171,6 +2170,43 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
     }
   }
 
+  // Specific handlers for InteractivePreview to update the correct design
+  const updateDesign1Transform = (updates: Partial<Transform>) => {
+    if (editMode.active && editMode.mockupIndex !== null) {
+      const idx = editMode.mockupIndex
+      setMockupCustomTransforms1(prev => {
+        const newMap = new Map(prev)
+        const currentTransform = getEffectiveTransform(idx, 1)
+        newMap.set(idx, { ...currentTransform, ...updates })
+        return newMap
+      })
+    } else {
+      setDesign1(prev => ({
+        ...prev,
+        transform: { ...prev.transform, ...updates }
+      }))
+    }
+    setCanvasRefreshKey(prev => prev + 1)
+  }
+
+  const updateDesign2Transform = (updates: Partial<Transform>) => {
+    if (editMode.active && editMode.mockupIndex !== null) {
+      const idx = editMode.mockupIndex
+      setMockupCustomTransforms2(prev => {
+        const newMap = new Map(prev)
+        const currentTransform = getEffectiveTransform(idx, 2)
+        newMap.set(idx, { ...currentTransform, ...updates })
+        return newMap
+      })
+    } else {
+      setDesign2(prev => ({
+        ...prev,
+        transform: { ...prev.transform, ...updates }
+      }))
+    }
+    setCanvasRefreshKey(prev => prev + 1)
+  }
+
   // Optimized save with non-blocking progress toasts, Cancel, and Retry
   const handleSave = async () => {
     setIsSaving(true)
@@ -2545,13 +2581,29 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
                   mockupImage={mockupImage}
                   designImage={design1.image}
                   design2Image={design2.image}
-                  design1Transform={getActiveEffectiveTransform()}
-                  design2Transform={design2.transform}
-                  design1BlendMode={getActiveEffectiveBlendMode()}
-                  design2BlendMode={design2.blendMode}
+                  design1Transform={
+                    editMode.active && editMode.mockupIndex !== null
+                      ? getEffectiveTransform(editMode.mockupIndex, 1)
+                      : design1.transform
+                  }
+                  design2Transform={
+                    editMode.active && editMode.mockupIndex !== null
+                      ? getEffectiveTransform(editMode.mockupIndex, 2)
+                      : design2.transform
+                  }
+                  design1BlendMode={
+                    editMode.active && editMode.mockupIndex !== null
+                      ? getEffectiveBlendMode(editMode.mockupIndex, 1)
+                      : design1.blendMode
+                  }
+                  design2BlendMode={
+                    editMode.active && editMode.mockupIndex !== null
+                      ? getEffectiveBlendMode(editMode.mockupIndex, 2)
+                      : design2.blendMode
+                  }
                   activeLayer={activeDesignNumber === 1 ? 'design1' : 'design2'}
-                  onDesign1TransformChange={updateActiveDesignTransform}
-                  onDesign2TransformChange={updateActiveDesignTransform}
+                  onDesign1TransformChange={updateDesign1Transform}
+                  onDesign2TransformChange={updateDesign2Transform}
                 />
 
                 {/* Expand Button */}

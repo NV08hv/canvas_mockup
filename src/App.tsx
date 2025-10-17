@@ -71,11 +71,11 @@ function App() {
             <p className="text-gray-400 mt-2">
               Session-based file editing • Auto-cleanup on exit
             </p>
-            {userId && (
+            {/* {userId && (
               <p className="text-xs text-gray-500 mt-2">
                 User: {userId} | Session: {sessionId?.substring(0, 8)}...
               </p>
-            )}
+            )} */}
           </div>
         </header>
 
