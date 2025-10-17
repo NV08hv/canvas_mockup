@@ -98,11 +98,13 @@ async function cleanupExpiredSessions() {
   sessions.forEach((session, sessionId) => {
     const timeSinceActivity = now - session.lastActivity.getTime()
     if (timeSinceActivity > SESSION_TIMEOUT) {
-      // Delete session files
-      const sessionDir = path.join(TMP_DIR, session.userId, sessionId)
-      if (fs.existsSync(sessionDir)) {
-        fs.rmSync(sessionDir, { recursive: true, force: true })
-        console.log(`Cleaned up session: ${sessionId} (user: ${session.userId})`)
+      // Delete session files only if userId exists
+      if (session.userId) {
+        const sessionDir = path.join(TMP_DIR, session.userId, sessionId)
+        if (fs.existsSync(sessionDir)) {
+          fs.rmSync(sessionDir, { recursive: true, force: true })
+          console.log(`Cleaned up session: ${sessionId} (user: ${session.userId})`)
+        }
       }
       sessions.delete(sessionId)
       cleanedCount++

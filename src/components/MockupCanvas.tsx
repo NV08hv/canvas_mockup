@@ -1511,6 +1511,7 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
   const [mockupImages, setMockupImages] = useState<HTMLImageElement[]>([])
   const [mockupFiles, setMockupFiles] = useState<ImageFile[]>([]) // Track file metadata with indices
   const [deletedFileNames, setDeletedFileNames] = useState<string[]>([]) // Track files to delete on save
+  const [hiddenMockupIndices, setHiddenMockupIndices] = useState<Set<number>>(new Set()) // Track hidden mockups (not deleted from memory)
   const [selectedMockupIndex, setSelectedMockupIndex] = useState<number>(0)
   const [mockupImage, setMockupImage] = useState<HTMLImageElement | null>(null)
   const [isSaving, setIsSaving] = useState(false) // Loading state for save operation
@@ -1732,6 +1733,9 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
     setMockupFiles(remainingFiles)
     setMockupImages(loadedImages)
 
+    // Clear hidden indices since we're rebuilding the arrays
+    setHiddenMockupIndices(new Set())
+
     // Update selected index if needed
     if (loadedImages.length > 0) {
       if (selectedMockupIndex >= loadedImages.length) {
@@ -1875,116 +1879,41 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
     ctx.restore()
   }
 
-  // Delete mockup image
+  // Delete mockup image (only hides from interface, keeps in memory)
   const deleteMockup = (index: number) => {
-    // Check if this file is from the database
-    const fileToDelete = mockupFiles[index]
-    if (fileToDelete && fileToDelete.isFromDatabase) {
-      // Add to deleted files list for batch deletion on save
-      setDeletedFileNames(prev => [...prev, fileToDelete.name])
-    }
-
-    // Remove from mockup images array
-    setMockupImages(prev => prev.filter((_, i) => i !== index))
-
-    // Remove from mockup files array
-    setMockupFiles(prev => prev.filter((_, i) => i !== index))
-
-    // Clean up custom transforms for this mockup
-    setMockupCustomTransforms1(prev => {
-      const newMap = new Map(prev)
-      newMap.delete(index)
-      // Re-index remaining items
-      const reindexed = new Map<number, Transform>()
-      Array.from(newMap.entries()).forEach(([idx, transform]) => {
-        if (idx > index) {
-          reindexed.set(idx - 1, transform)
-        } else {
-          reindexed.set(idx, transform)
-        }
-      })
-      return reindexed
-    })
-
-    setMockupCustomBlendModes1(prev => {
-      const newMap = new Map(prev)
-      newMap.delete(index)
-      const reindexed = new Map<number, BlendMode>()
-      Array.from(newMap.entries()).forEach(([idx, blendMode]) => {
-        if (idx > index) {
-          reindexed.set(idx - 1, blendMode)
-        } else {
-          reindexed.set(idx, blendMode)
-        }
-      })
-      return reindexed
-    })
-
-    setMockupOffsets(prev => {
-      const newMap = new Map(prev)
-      newMap.delete(index)
-      const reindexed = new Map<number, { x: number; y: number }>()
-      Array.from(newMap.entries()).forEach(([idx, offset]) => {
-        if (idx > index) {
-          reindexed.set(idx - 1, offset)
-        } else {
-          reindexed.set(idx, offset)
-        }
-      })
-      return reindexed
-    })
-
-    // Update selected index
-    if (selectedMockupIndex >= index && selectedMockupIndex > 0) {
-      setSelectedMockupIndex(prev => Math.max(0, prev - 1))
-    }
+    // Simply add the index to hidden set instead of removing from arrays
+    setHiddenMockupIndices(prev => new Set(prev).add(index))
 
     // Exit edit mode if editing this mockup
     if (editMode.active && editMode.mockupIndex === index) {
       setEditMode({ active: false, mockupIndex: null })
-    } else if (editMode.active && editMode.mockupIndex !== null && editMode.mockupIndex > index) {
-      setEditMode(prev => ({ ...prev, mockupIndex: prev.mockupIndex! - 1 }))
+    }
+
+    // Update selected index to next visible mockup
+    const visibleIndices = mockupFiles
+      .map((_, i) => i)
+      .filter(i => i !== index && !hiddenMockupIndices.has(i))
+
+    if (visibleIndices.length > 0) {
+      // Find the next visible index after the deleted one
+      const nextVisible = visibleIndices.find(i => i > index)
+      setSelectedMockupIndex(nextVisible ?? visibleIndices[visibleIndices.length - 1])
+    } else {
+      setSelectedMockupIndex(0)
     }
 
     setCanvasRefreshKey(prev => prev + 1)
   }
 
-  // Delete all mockup images (hard reset - no rehydration)
+  // Delete all mockup images (only hides from interface, keeps in memory)
   const deleteAllMockups = async () => {
-    try {
-      // Call server to clear files immediately
-      const response = await fetch(`${API_BASE}/files/clear`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId,
-          userId
-        })
-      })
-
-      if (!response.ok) {
-        console.error('Failed to clear server files:', response.status)
-        // Continue anyway with client reset
-      }
-    } catch (error) {
-      console.error('Error clearing server files:', error)
-      // Continue anyway with client reset
-    }
-
-    // HARD RESET: Clear all state completely
-    setMockupImages([])
-    setMockupFiles([])
-    setSelectedMockupIndex(0)
-    setMockupImage(null)
-    setDeletedFileNames([])
-
-    // Reset per-mockup custom settings and offsets
-    setMockupCustomTransforms1(new Map())
-    setMockupCustomBlendModes1(new Map())
-    setMockupOffsets(new Map())
+    // Hide all mockups by adding all indices to hidden set
+    const allIndices = mockupFiles.map((_, index) => index)
+    setHiddenMockupIndices(new Set(allIndices))
 
     // Reset selection and edit mode
     setSelectedMockupIndex(0)
+    setMockupImage(null)
     if (editMode.active) {
       setEditMode({ active: false, mockupIndex: null })
     }
@@ -2414,41 +2343,46 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
 
   // Export all mockups as ZIP
   const handleExport = async () => {
-    if (mockupImages.length === 0) return
+    if (mockupImages.filter((_, i) => !hiddenMockupIndices.has(i)).length === 0) return
 
     const zip = new JSZip()
     const folder = zip.folder('mockups')
 
     // Create promises for all canvas conversions
-    const promises = mockupImages.map((mockupImg, index) => {
-      return new Promise<void>((resolve) => {
-        const tempCanvas = document.createElement('canvas')
-        const ctx = tempCanvas.getContext('2d')
-        if (!ctx) {
-          resolve()
-          return
-        }
+    const promises = mockupImages
+      .map((mockupImg, index) => {
+        // Skip hidden mockups
+        if (hiddenMockupIndices.has(index)) return null
 
-        tempCanvas.width = mockupImg.width
-        tempCanvas.height = mockupImg.height
-
-        // Draw mockup
-        ctx.clearRect(0, 0, tempCanvas.width, tempCanvas.height)
-        ctx.drawImage(mockupImg, 0, 0)
-
-        // Draw both designs
-        drawDesign(ctx, index, 1)
-        drawDesign(ctx, index, 2)
-
-        // Convert to blob and add to zip
-        tempCanvas.toBlob((blob) => {
-          if (blob && folder) {
-            folder.file(`mockup_${index + 1}.png`, blob)
+        return new Promise<void>((resolve) => {
+          const tempCanvas = document.createElement('canvas')
+          const ctx = tempCanvas.getContext('2d')
+          if (!ctx) {
+            resolve()
+            return
           }
-          resolve()
-        }, 'image/png')
+
+          tempCanvas.width = mockupImg.width
+          tempCanvas.height = mockupImg.height
+
+          // Draw mockup
+          ctx.clearRect(0, 0, tempCanvas.width, tempCanvas.height)
+          ctx.drawImage(mockupImg, 0, 0)
+
+          // Draw both designs
+          drawDesign(ctx, index, 1)
+          drawDesign(ctx, index, 2)
+
+          // Convert to blob and add to zip
+          tempCanvas.toBlob((blob) => {
+            if (blob && folder) {
+              folder.file(`mockup_${index + 1}.png`, blob)
+            }
+            resolve()
+          }, 'image/png')
+        })
       })
-    })
+      .filter((p): p is Promise<void> => p !== null)
 
     // Wait for all images to be processed
     await Promise.all(promises)
@@ -2726,7 +2660,8 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
                 {/* Export Button */}
                 <button
                   onClick={handleExport}
-                  className="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-6 rounded transition"
+                  disabled={mockupImages.filter((_, i) => !hiddenMockupIndices.has(i)).length === 0}
+                  className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold py-3 px-6 rounded transition"
                 >
                   Download ZIP
                 </button>
@@ -2734,7 +2669,7 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
                 <div className="bg-gray-700 rounded-lg p-3">
                   <h4 className="text-sm font-semibold mb-2">Export Info:</h4>
                   <div className="text-xs text-gray-400 space-y-1">
-                    <p>• {mockupImages.length} mockup images</p>
+                    <p>• {mockupImages.filter((_, i) => !hiddenMockupIndices.has(i)).length} mockup images</p>
                     {design1.image && (
                       <p>• Design: {design1.image.width}×{design1.image.height}px {design1.visible ? '' : '(hidden)'}</p>
                     )}
@@ -2748,7 +2683,7 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
 
       {/* Mockup Grid Area - Right Column (Fluid) */}
       <div className="flex-1 bg-gray-800 rounded-lg p-6">
-        {mockupImages.length === 0 ? (
+        {mockupImages.filter((_, i) => !hiddenMockupIndices.has(i)).length === 0 ? (
           <div className="text-center text-gray-400 py-20">
             <div className="mb-4">
               <p className="text-lg font-semibold mb-2">Upload mockup files to get started</p>
@@ -2762,21 +2697,17 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
             <div className="bg-gray-700 rounded-lg p-4">
               <h3 className="text-lg font-semibold mb-2">Mockup Preview</h3>
               <p className="text-sm text-gray-400">
-                {mockupImages.length} mockup(s)
+                {mockupImages.filter((_, i) => !hiddenMockupIndices.has(i)).length} mockup(s)
                 {design1.image && ` • Design loaded`}
               </p>
               <div className="mt-3">
                 <button
                   onClick={() => {
                     if (mockupImages.length === 0) return
-                    // Non-blocking toast with Undo action
-                    const count = mockupImages.length
-                    const previousState = {
-                      mockupFiles: [...mockupFiles],
-                      mockupImages: [...mockupImages],
-                      deletedFileNames: [...deletedFileNames],
-                      selectedMockupIndex
-                    }
+                    // Save current state for undo
+                    const count = mockupImages.filter((_, i) => !hiddenMockupIndices.has(i)).length
+                    const previousHiddenIndices = new Set(hiddenMockupIndices)
+                    const previousSelectedIndex = selectedMockupIndex
 
                     // Delete immediately
                     deleteAllMockups()
@@ -2790,13 +2721,13 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
                         {
                           label: 'Undo',
                           onClick: () => {
-                            setMockupFiles(previousState.mockupFiles)
-                            setMockupImages(previousState.mockupImages)
-                            setDeletedFileNames(previousState.deletedFileNames)
-                            setSelectedMockupIndex(previousState.selectedMockupIndex)
-                            if (previousState.mockupImages.length > 0) {
-                              setMockupImage(previousState.mockupImages[previousState.selectedMockupIndex])
+                            // Restore previous hidden state
+                            setHiddenMockupIndices(previousHiddenIndices)
+                            setSelectedMockupIndex(previousSelectedIndex)
+                            if (mockupImages.length > 0 && mockupImages[previousSelectedIndex]) {
+                              setMockupImage(mockupImages[previousSelectedIndex])
                             }
+                            setCanvasRefreshKey(prev => prev + 1)
                             toast.success('Deletion undone')
                           }
                         }
@@ -2804,7 +2735,7 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
                     })
                   }}
                   className="w-full bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded transition disabled:bg-gray-600 disabled:cursor-not-allowed"
-                  disabled={mockupImages.length === 0}
+                  disabled={mockupImages.filter((_, i) => !hiddenMockupIndices.has(i)).length === 0}
                   title="Delete all mockups"
                 >
                   Delete All
@@ -2856,6 +2787,9 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
             {/* Mockup grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4" key={`grid-${canvasRefreshKey}`}>
               {mockupImages.map((mockupImg, index) => {
+                // Skip hidden mockups
+                if (hiddenMockupIndices.has(index)) return null
+
                 const tempCanvas = document.createElement('canvas')
                 const ctx = tempCanvas.getContext('2d')
                 if (!ctx) return null
@@ -3003,13 +2937,6 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
-                            // Non-blocking toast with Undo action
-                            const deletedMockup = {
-                              file: mockupFiles[index],
-                              image: mockupImages[index],
-                              index
-                            }
-
                             // Delete immediately
                             deleteMockup(index)
 
@@ -3022,21 +2949,13 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
                                 {
                                   label: 'Undo',
                                   onClick: () => {
-                                    // Restore the deleted mockup
-                                    setMockupFiles(prev => {
-                                      const newFiles = [...prev]
-                                      newFiles.splice(deletedMockup.index, 0, deletedMockup.file)
-                                      return newFiles
+                                    // Restore by removing from hidden set
+                                    setHiddenMockupIndices(prev => {
+                                      const newSet = new Set(prev)
+                                      newSet.delete(index)
+                                      return newSet
                                     })
-                                    setMockupImages(prev => {
-                                      const newImages = [...prev]
-                                      newImages.splice(deletedMockup.index, 0, deletedMockup.image)
-                                      return newImages
-                                    })
-                                    // Remove from deleted list if it was saved
-                                    if (deletedMockup.file.isFromDatabase) {
-                                      setDeletedFileNames(prev => prev.filter(name => name !== deletedMockup.file.name))
-                                    }
+                                    setCanvasRefreshKey(prev => prev + 1)
                                     toast.success('Deletion undone')
                                   }
                                 }
