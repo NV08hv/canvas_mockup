@@ -155,7 +155,7 @@ export default function MockupModal({
               className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold rounded transition"
               title={remainingCount === 0 ? 'You must keep at least one image' : ''}
             >
-              Next ({remainingCount})
+              Apply Changes ({remainingCount})
             </button>
           </div>
         </div>

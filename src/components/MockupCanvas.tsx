@@ -1510,6 +1510,7 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
   const toast = useToast()
   const [mockupImages, setMockupImages] = useState<HTMLImageElement[]>([])
   const [mockupFiles, setMockupFiles] = useState<ImageFile[]>([]) // Track file metadata with indices
+  const [modalFiles, setModalFiles] = useState<ImageFile[]>([]) // Server-only files for Show Mockup modal
   const [deletedFileNames, setDeletedFileNames] = useState<string[]>([]) // Track files to delete on save
   const [hiddenMockupIndices, setHiddenMockupIndices] = useState<Set<number>>(new Set()) // Track hidden mockups (not deleted from memory)
   const [selectedMockupIndex, setSelectedMockupIndex] = useState<number>(0)
@@ -1545,7 +1546,7 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
   const [mockupCustomBlendModes1, setMockupCustomBlendModes1] = useState<Map<number, BlendMode>>(new Map())
 
   const [mockupCustomTransforms2, setMockupCustomTransforms2] = useState<Map<number, Transform>>(new Map())
-  const [mockupCustomBlendModes2, setMockupCustomBlendModes2] = useState<Map<number, BlendMode>>(new Map())
+  const [mockupCustomBlendModes2, _setMockupCustomBlendModes2] = useState<Map<number, BlendMode>>(new Map())
 
   // Edit mode state
   const [editMode, setEditMode] = useState<{ active: boolean; mockupIndex: number | null }>({ active: false, mockupIndex: null })
@@ -1612,15 +1613,16 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
       const response = await fetch(`${API_BASE}/files/${userId}/${sessionId}`)
 
       if (!response.ok) {
-        console.error('Failed to fetch files from server:', response.status)
-        toast.error('Failed to load mockups from server')
+        console.error('Failed to fetch files:', response.status)
+        toast.error('Failed to load mockups')
         return
       }
 
       const serverFiles = await response.json()
 
-      // If no files on server, just open the modal with current mockupFiles
+      // If no files on server, open modal with empty array (no staged uploads shown)
       if (!serverFiles || serverFiles.length === 0) {
+        setModalFiles([])
         setShowMockupModal(true)
         return
       }
@@ -1669,38 +1671,109 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
         }
       }
 
-      // Merge with existing mockupFiles, avoiding duplicates by name
-      const existingFileNames = new Set(mockupFiles.map(f => f.name))
-      const newFiles = loadedFiles.filter(f => !existingFileNames.has(f.name))
-
-      if (newFiles.length > 0) {
-        setMockupFiles([...mockupFiles, ...newFiles])
-
-        // Load images
-        const newImages: HTMLImageElement[] = []
-        for (const file of newFiles) {
-          try {
-            const img = new Image()
-            await new Promise<void>((resolve, reject) => {
-              img.onload = () => resolve()
-              img.onerror = () => reject(new Error('Failed to load image'))
-              img.src = file.url
-            })
-            newImages.push(img)
-          } catch (error) {
-            console.error(`Failed to load image: ${file.name}`, error)
-          }
-        }
-
-        setMockupImages([...mockupImages, ...newImages])
-        toast.success(`Loaded ${newFiles.length} mockup${newFiles.length !== 1 ? 's' : ''} from server`)
-      }
+      // Store server files for modal display only (don't update main mockupFiles)
+      setModalFiles(loadedFiles)
 
       // Open the modal
       setShowMockupModal(true)
     } catch (error) {
       console.error('Error loading mockups:', error)
-      toast.error('Failed to load mockups from server')
+      toast.error('Failed to load mockups')
+    }
+  }
+
+  // Handle Manager button - Load server files directly into editing interface
+  const handleManager = async () => {
+    try {
+      // Fetch files from server
+      const response = await fetch(`${API_BASE}/files/${userId}/${sessionId}`)
+
+      if (!response.ok) {
+        console.error('Failed to fetch files:', response.status)
+        toast.error('Failed to load files')
+        return
+      }
+
+      const serverFiles = await response.json()
+
+      // If no files on server, show message
+      if (!serverFiles || serverFiles.length === 0) {
+        toast.error('No files on server')
+        return
+      }
+
+      // Load images from server and create ImageFile objects
+      const loadedFiles: ImageFile[] = []
+      const loadedImages: HTMLImageElement[] = []
+
+      for (const serverFile of serverFiles) {
+        try {
+          // Construct the URL for the file
+          const fileUrl = `${import.meta.env.VITE_API_BASE_URL || 'https://mockupai.supover.com'}/tmp/${userId}/${sessionId}/${serverFile.name}`
+
+          // Fetch the file as a blob
+          const fileResponse = await fetch(fileUrl)
+          if (!fileResponse.ok) {
+            console.error(`Failed to fetch file: ${serverFile.name}`)
+            continue
+          }
+
+          const blob = await fileResponse.blob()
+          const file = new File([blob], serverFile.name, { type: blob.type || 'image/png' })
+
+          // Create object URL for preview
+          const objectUrl = URL.createObjectURL(blob)
+
+          // Extract file extension
+          const ext = serverFile.name.substring(serverFile.name.lastIndexOf('.')) || '.png'
+
+          // Create ImageFile object
+          const imageFile: ImageFile = {
+            id: Math.random().toString(36).substring(2, 11),
+            url: objectUrl,
+            name: serverFile.name,
+            source: 'file',
+            file: file,
+            index: serverFile.index,
+            isFromDatabase: true,
+            size: blob.size,
+            type: blob.type || 'image/png',
+            ext: ext
+          }
+
+          loadedFiles.push(imageFile)
+
+          // Load image
+          const img = new Image()
+          await new Promise<void>((resolve, reject) => {
+            img.onload = () => resolve()
+            img.onerror = () => reject(new Error('Failed to load image'))
+            img.src = objectUrl
+          })
+          loadedImages.push(img)
+        } catch (error) {
+          console.error(`Error loading file ${serverFile.name}:`, error)
+        }
+      }
+
+      // Update editing interface with server files
+      setMockupFiles(loadedFiles)
+      setMockupImages(loadedImages)
+      setHiddenMockupIndices(new Set())
+
+      // Set first image as selected
+      if (loadedImages.length > 0) {
+        setSelectedMockupIndex(0)
+        setMockupImage(loadedImages[0])
+      } else {
+        setSelectedMockupIndex(0)
+        setMockupImage(null)
+      }
+
+      toast.success(`Loaded ${loadedFiles.length} file${loadedFiles.length !== 1 ? 's' : ''}`)
+    } catch (error) {
+      console.error('Error loading files:', error)
+      toast.error('Failed to load files')
     }
   }
 
@@ -1709,9 +1782,18 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
     setShowMockupModal(false)
   }
 
-  // Handle modal Next button (with deletions applied)
+  // Handle modal Save Changes button (preview-only: track deletions but don't apply until main Save)
   const handleModalNext = async (remainingFiles: ImageFile[]) => {
-    // Load all images from remaining files
+    // Identify which files were deleted (files in modalFiles but not in remainingFiles)
+    const remainingIds = new Set(remainingFiles.map(f => f.id))
+    const deletedFiles = modalFiles.filter(f => !remainingIds.has(f.id) && f.isFromDatabase)
+
+    // Track deleted file names for later deletion on main Save
+    if (deletedFiles.length > 0) {
+      setDeletedFileNames(prev => [...prev, ...deletedFiles.map(f => f.name)])
+    }
+
+    // Load remaining server files into the interface for editing
     const loadedImages: HTMLImageElement[] = []
 
     for (const file of remainingFiles) {
@@ -1728,21 +1810,22 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
       }
     }
 
-    // Update state
-    setMockupFiles(remainingFiles)
-    setMockupImages(loadedImages)
+    // Update interface with remaining server files + any staged uploads
+    const stagedUploads = mockupFiles.filter(f => !f.isFromDatabase)
+    setMockupFiles([...remainingFiles, ...stagedUploads])
+    setMockupImages([...loadedImages, ...mockupImages.filter((_, i) => !mockupFiles[i]?.isFromDatabase)])
 
     // Clear hidden indices since we're rebuilding the arrays
     setHiddenMockupIndices(new Set())
 
     // Update selected index if needed
     if (loadedImages.length > 0) {
-      if (selectedMockupIndex >= loadedImages.length) {
-        setSelectedMockupIndex(0)
-        setMockupImage(loadedImages[0])
-      } else {
-        setMockupImage(loadedImages[selectedMockupIndex])
-      }
+      setSelectedMockupIndex(0)
+      setMockupImage(loadedImages[0])
+    } else if (mockupImages.length > loadedImages.length) {
+      // If only staged uploads remain
+      setSelectedMockupIndex(0)
+      setMockupImage(mockupImages[loadedImages.length])
     } else {
       setSelectedMockupIndex(0)
       setMockupImage(null)
@@ -1878,9 +1961,32 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
     ctx.restore()
   }
 
-  // Delete mockup image (only hides from interface, keeps in memory)
-  const deleteMockup = (index: number) => {
-    // Simply add the index to hidden set instead of removing from arrays
+  // Delete mockup image (hides from interface and deletes from server if from database)
+  const deleteMockup = async (index: number) => {
+    const file = mockupFiles[index]
+
+    // If file is from database, delete  immediately
+    if (file && file.isFromDatabase) {
+      try {
+        const response = await fetch(`${API_BASE}/files/${userId}/${sessionId}/${encodeURIComponent(file.name)}`, {
+          method: 'DELETE'
+        })
+
+        if (response.ok) {
+          toast.success(`Deleted ${file.name}`)
+        } else {
+          console.error(`Failed to delete ${file.name}: ${response.status}`)
+          toast.error(`Failed to delete ${file.name}`)
+          return // Don't hide if delete failed
+        }
+      } catch (error) {
+        console.error(`Error deleting ${file.name}:`, error)
+        toast.error(`Error deleting ${file.name}`)
+        return // Don't hide if delete failed
+      }
+    }
+
+    // Hide the mockup from interface
     setHiddenMockupIndices(prev => new Set(prev).add(index))
 
     // Exit edit mode if editing this mockup
@@ -2214,8 +2320,30 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
     let progressToastId: string | null = null
     let uploadedCount = 0
     let failedCount = 0
+    let deletedCount = 0
 
     try {
+      // First, delete files marked for deletion
+      if (deletedFileNames.length > 0) {
+        for (const filename of deletedFileNames) {
+          try {
+            const response = await fetch(`${API_BASE}/files/${userId}/${sessionId}/${encodeURIComponent(filename)}`, {
+              method: 'DELETE'
+            })
+
+            if (response.ok) {
+              deletedCount++
+            } else {
+              console.error(`Failed to delete ${filename}: ${response.status}`)
+              failedCount++
+            }
+          } catch (error) {
+            console.error(`Error deleting ${filename}:`, error)
+            failedCount++
+          }
+        }
+      }
+
       // Upload files that are not from database
       const filesToUpload = mockupFiles.filter(file => !file.isFromDatabase)
       const CONCURRENCY = 8
@@ -2312,23 +2440,34 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
         }
       }
 
-      // Update UI state
-      setMockupFiles(prev => prev.map(file => ({ ...file, isFromDatabase: true })))
+      // Clear interface state after successful save
+      // User must click "Show Mockup" to reload from database
+      setMockupFiles([])
+      setMockupImages([])
+      setSelectedMockupIndex(0)
+      setMockupImage(null)
       setDeletedFileNames([])
 
       // Show success toast
       let message: string
       let toastType: ToastType = 'success'
 
-      if (uploadedCount === 0 && failedCount === 0) {
-        message = 'No new files to save.'
+      if (uploadedCount === 0 && deletedCount === 0 && failedCount === 0) {
+        message = 'No changes to save.'
       } else if (failedCount > 0) {
         // Partial errors
-        message = `Saved ${uploadedCount} file${uploadedCount !== 1 ? 's' : ''}, ${failedCount} failed.`
+        const parts = []
+        if (uploadedCount > 0) parts.push(`uploaded ${uploadedCount}`)
+        if (deletedCount > 0) parts.push(`deleted ${deletedCount}`)
+        parts.push(`${failedCount} failed`)
+        message = parts.join(', ') + '.'
         toastType = 'error'
       } else {
         // All successful
-        message = `Saved ${uploadedCount} file${uploadedCount !== 1 ? 's' : ''} successfully.`
+        const parts = []
+        if (uploadedCount > 0) parts.push(`${uploadedCount} file${uploadedCount !== 1 ? 's' : ''} uploaded`)
+        if (deletedCount > 0) parts.push(`${deletedCount} file${deletedCount !== 1 ? 's' : ''} deleted`)
+        message = parts.join(', ') + ' successfully.'
       }
 
       toast.showAdvancedToast({
@@ -2458,18 +2597,26 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
                 onClick={handleShowMockup}
                 className="bg-cyan-600 hover:bg-cyan-700 text-white font-semibold py-3 px-4 rounded transition text-sm"
               >
-                Show Mockup
+                Load Mockup
               </button>
 
-              {/* Save Changes Button */}
+              {/* Manager Button - Load server files to editing interface */}
               <button
-                onClick={handleSave}
-                disabled={isSaving || (mockupFiles.filter(f => !f.isFromDatabase).length === 0 && deletedFileNames.length === 0)}
-                className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold py-3 px-4 rounded transition text-sm"
+                onClick={handleManager}
+                className="bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-4 rounded transition text-sm"
               >
-                {isSaving ? 'Saving...' : 'Save Changes'}
+                Manager
               </button>
             </div>
+
+            {/* Save Changes Button - Full Width */}
+            <button
+              onClick={handleSave}
+              disabled={isSaving || (mockupFiles.filter(f => !f.isFromDatabase).length === 0 && deletedFileNames.length === 0)}
+              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-semibold py-3 px-4 rounded transition text-sm"
+            >
+              {isSaving ? 'Saving...' : 'Save Changes'}
+            </button>
 
             {/* Unsaved Changes Info */}
             {(mockupFiles.filter(f => !f.isFromDatabase).length > 0 || deletedFileNames.length > 0) && (
@@ -2987,32 +3134,19 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
                           </button>
                         )}
                         <button
-                          onClick={(e) => {
+                          onClick={async (e) => {
                             e.stopPropagation()
-                            // Delete immediately
-                            deleteMockup(index)
+                            const file = mockupFiles[index]
 
-                            // Show toast with Undo action (30s)
-                            toast.showAdvancedToast({
-                              type: 'info',
-                              message: `Deleted mockup ${index + 1}`,
-                              duration: 30000,
-                              actions: [
-                                {
-                                  label: 'Undo',
-                                  onClick: () => {
-                                    // Restore by removing from hidden set
-                                    setHiddenMockupIndices(prev => {
-                                      const newSet = new Set(prev)
-                                      newSet.delete(index)
-                                      return newSet
-                                    })
-                                    setCanvasRefreshKey(prev => prev + 1)
-                                    toast.success('Deletion undone')
-                                  }
-                                }
-                              ]
-                            })
+                            // Confirm deletion for database files
+                            if (file?.isFromDatabase) {
+                              if (!confirm(`Delete ${file.name}? This cannot be undone.`)) {
+                                return
+                              }
+                            }
+
+                            // Delete (from server if database file)
+                            await deleteMockup(index)
                           }}
                           className="px-3 text-xs py-2 rounded transition bg-red-600 hover:bg-red-700 text-white"
                           title="Delete mockup"
@@ -3136,7 +3270,7 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
       {/* Mockup Modal */}
       {showMockupModal && (
         <MockupModal
-          mockupFiles={mockupFiles}
+          mockupFiles={modalFiles}
           onClose={handleModalClose}
           onNext={handleModalNext}
         />
