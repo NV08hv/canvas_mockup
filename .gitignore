@@ -23,9 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 
-# Temporary session files
-tmp/
-sessions.json
+# Uploaded files and database
 uploads/
 
 public/

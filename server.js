@@ -1,11 +1,11 @@
-// Express server with session-based file management
+// Express server with file management
 import express from 'express'
 import multer from 'multer'
 import cors from 'cors'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import crypto from 'crypto'
+import { imageDb } from './database.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -20,287 +20,87 @@ app.use(cors({
 }))
 app.use(express.json())
 
-// Session configuration
-const SESSION_TIMEOUT = parseInt(process.env.SESSION_TIMEOUT) || 15 * 60 * 1000 // 15 minutes in milliseconds
-const CLEANUP_CHECK_INTERVAL = parseInt(process.env.CLEANUP_CHECK_INTERVAL) || 10 * 60 * 1000 // Check every 10 minutes
-const TMP_DIR = path.join(__dirname, 'tmp')
+// File storage configuration
+const UPLOADS_DIR = path.join(__dirname, 'uploads')
 
-// In-memory session storage (persisted to filesystem)
-const sessions = new Map()
-
-// Ensure tmp directory exists
-if (!fs.existsSync(TMP_DIR)) {
-  fs.mkdirSync(TMP_DIR, { recursive: true })
+// Ensure uploads directory exists
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true })
 }
-
-// Load existing sessions from filesystem on startup
-function loadSessions() {
-  try {
-    const sessionFile = path.join(TMP_DIR, 'sessions.json')
-    if (fs.existsSync(sessionFile)) {
-      const data = JSON.parse(fs.readFileSync(sessionFile, 'utf-8'))
-      data.forEach(session => {
-        sessions.set(session.sessionId, {
-          ...session,
-          lastActivity: new Date(session.lastActivity)
-        })
-      })
-      console.log(`Loaded ${sessions.size} sessions from disk`)
-    }
-  } catch (error) {
-    console.error('Error loading sessions:', error)
-  }
-}
-
-// Batch file writing with debouncing
-let saveTimeout = null
-const SAVE_DEBOUNCE_DELAY = parseInt(process.env.SAVE_DEBOUNCE_DELAY) || 2000 // Save after 2 seconds of inactivity
-
-// Save sessions to filesystem (async with debouncing)
-async function saveSessions() {
-  try {
-    const sessionFile = path.join(TMP_DIR, 'sessions.json')
-    const data = Array.from(sessions.values())
-    await fs.promises.writeFile(sessionFile, JSON.stringify(data, null, 2))
-    console.log(`Saved ${sessions.size} sessions to disk`)
-  } catch (error) {
-    console.error('Error saving sessions:', error)
-  }
-}
-
-// Debounced save function - batches multiple updates
-function scheduleSaveSessions() {
-  if (saveTimeout) {
-    clearTimeout(saveTimeout)
-  }
-  saveTimeout = setTimeout(saveSessions, SAVE_DEBOUNCE_DELAY)
-}
-
-// Generate unique session ID
-function generateSessionId() {
-  return crypto.randomBytes(16).toString('hex')
-}
-
-// Update session activity
-function updateSessionActivity(sessionId) {
-  const session = sessions.get(sessionId)
-  if (session) {
-    session.lastActivity = new Date()
-    scheduleSaveSessions() // Use debounced save instead of immediate save
-  }
-}
-
-// Cleanup expired sessions
-async function cleanupExpiredSessions() {
-  const now = Date.now()
-  let cleanedCount = 0
-
-  sessions.forEach((session, sessionId) => {
-    const timeSinceActivity = now - session.lastActivity.getTime()
-    if (timeSinceActivity > SESSION_TIMEOUT) {
-      // Delete session files only if userId exists
-      if (session.userId) {
-        const sessionDir = path.join(TMP_DIR, session.userId, sessionId)
-        if (fs.existsSync(sessionDir)) {
-          fs.rmSync(sessionDir, { recursive: true, force: true })
-          //console.log(`Cleaned up session: ${sessionId} (user: ${session.userId})`)
-        }
-      }
-      sessions.delete(sessionId)
-      cleanedCount++
-    }
-  })
-
-  if (cleanedCount > 0) {
-    await saveSessions() // Use async save for cleanup
-  }
-}
-
-// Start cleanup interval
-setInterval(cleanupExpiredSessions, CLEANUP_CHECK_INTERVAL)
-
-// Load sessions on startup
-loadSessions()
 
 // Configure multer to use temporary directory first
 const tempUpload = multer({
-  dest: path.join(TMP_DIR, 'uploads'),
+  dest: path.join(UPLOADS_DIR, 'temp'),
   limits: {
     fileSize: 10 * 1024 * 1024 // 10MB limit
   }
 })
 
 // Ensure temp upload directory exists
-const tempUploadDir = path.join(TMP_DIR, 'uploads')
+const tempUploadDir = path.join(UPLOADS_DIR, 'temp')
 if (!fs.existsSync(tempUploadDir)) {
   fs.mkdirSync(tempUploadDir, { recursive: true })
 }
 
-// Create or retrieve session
-app.post('/api/session/create', (req, res) => {
+// Get all files for a user
+app.get('/api/files/:userId', (req, res) => {
   try {
-    const { userId, sessionId } = req.body
+    const { userId } = req.params
 
     if (!userId) {
       return res.status(400).json({ error: 'User ID is required' })
     }
 
-    // If sessionId provided, validate it exists
-    if (sessionId && sessions.has(sessionId)) {
-      const session = sessions.get(sessionId)
-      // Verify it belongs to the same user
-      if (session.userId === userId) {
-        updateSessionActivity(sessionId)
-        return res.json({
-          sessionId: session.sessionId,
-          userId: session.userId,
-          restored: true
-        })
-      }
-    }
+    // Get files from database
+    const dbFiles = imageDb.getByUserId(userId)
 
-    // Create new session
-    const newSessionId = generateSessionId()
-    const session = {
-      sessionId: newSessionId,
-      userId: userId,
-      createdAt: new Date(),
-      lastActivity: new Date()
-    }
-
-    sessions.set(newSessionId, session)
-    scheduleSaveSessions()
-
-    //console.log(`Created new session: ${newSessionId} for user: ${userId}`)
-
-    res.json({
-      sessionId: newSessionId,
-      userId: userId,
-      restored: false
-    })
-  } catch (error) {
-    console.error('Error creating session:', error)
-    res.status(500).json({ error: 'Failed to create session' })
-  }
-})
-
-// Heartbeat to keep session alive
-app.post('/api/session/heartbeat', (req, res) => {
-  try {
-    const { sessionId } = req.body
-
-    if (!sessionId) {
-      return res.status(400).json({ error: 'Session ID is required' })
-    }
-
-    const session = sessions.get(sessionId)
-    if (!session) {
-      return res.status(404).json({ error: 'Session not found' })
-    }
-
-    updateSessionActivity(sessionId)
-    res.json({ message: 'Session updated', sessionId })
-  } catch (error) {
-    console.error('Error updating session:', error)
-    res.status(500).json({ error: 'Failed to update session' })
-  }
-})
-
-// End session manually
-app.post('/api/session/end', (req, res) => {
-  try {
-    const { sessionId } = req.body
-
-    if (!sessionId) {
-      return res.status(400).json({ error: 'Session ID is required' })
-    }
-
-    const session = sessions.get(sessionId)
-    if (session) {
-      // Delete session files
-      const sessionDir = path.join(TMP_DIR, session.userId, sessionId)
-      if (fs.existsSync(sessionDir)) {
-        fs.rmSync(sessionDir, { recursive: true, force: true })
-        console.log(`Manually ended session: ${sessionId}`)
-      }
-      sessions.delete(sessionId)
-      saveSessions()
-    }
-
-    res.json({ message: 'Session ended', sessionId })
-  } catch (error) {
-    console.error('Error ending session:', error)
-    res.status(500).json({ error: 'Failed to end session' })
-  }
-})
-
-// Get all files for a session
-app.get('/api/files/:userId/:sessionId', (req, res) => {
-  try {
-    const { userId, sessionId } = req.params
-
-    const session = sessions.get(sessionId)
-    if (!session || session.userId !== userId) {
-      return res.status(404).json({ error: 'Session not found' })
-    }
-
-    updateSessionActivity(sessionId)
-
-    const sessionDir = path.join(TMP_DIR, userId, sessionId)
-
-    // Check if directory exists
-    if (!fs.existsSync(sessionDir)) {
-      return res.json([])
-    }
-
-    const files = fs.readdirSync(sessionDir)
-      .filter(file => {
-        const filePath = path.join(sessionDir, file)
-        return fs.statSync(filePath).isFile()
-      })
-      .map((file, index) => ({
-        name: file,
-        index: index
-      }))
+    // Map database results to expected format
+    const files = dbFiles.map((file, index) => ({
+      name: file.file_name,
+      index: index,
+      url: file.file_url,
+      id: file.id,
+      created_at: file.created_at
+    }))
 
     res.json(files)
   } catch (error) {
-    console.error('Error reading session files:', error)
+    console.error('Error reading user files:', error)
     res.status(500).json({ error: 'Failed to read files' })
   }
 })
 
 
-// Clear/reset all files for a session (for Delete All)
+// Clear/reset all files for a user (for Delete All)
 app.post('/api/files/clear', (req, res) => {
   try {
-    const { userId, sessionId } = req.body
+    const { userId } = req.body
 
-    if (!sessionId || !userId) {
-      return res.status(400).json({ error: 'Session ID and User ID are required' })
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' })
     }
 
-    const session = sessions.get(sessionId)
-    if (!session || session.userId !== userId) {
-      return res.status(404).json({ error: 'Session not found' })
+    // Delete all files from database first
+    try {
+      imageDb.deleteAllByUserId(userId)
+      console.log(`Cleared all files from database for user ${userId}`)
+    } catch (dbError) {
+      console.error('Error clearing files from database:', dbError)
+      return res.status(500).json({ error: 'Failed to clear files from database' })
     }
 
-    updateSessionActivity(sessionId)
-
-    const sessionDir = path.join(TMP_DIR, userId, sessionId)
-
-    // Delete all files in session directory
-    if (fs.existsSync(sessionDir)) {
-      const files = fs.readdirSync(sessionDir)
+    // Then delete all files from filesystem
+    const userDir = path.join(UPLOADS_DIR, userId)
+    if (fs.existsSync(userDir)) {
+      const files = fs.readdirSync(userDir)
       files.forEach(file => {
-        const filePath = path.join(sessionDir, file)
+        const filePath = path.join(userDir, file)
         if (fs.statSync(filePath).isFile()) {
           fs.unlinkSync(filePath)
         }
       })
+      console.log(`Cleared all files from filesystem for user ${userId}`)
     }
-
-    console.log(`Cleared all files for session ${sessionId}`)
 
     res.json({ message: 'All files cleared successfully' })
   } catch (error) {
@@ -310,51 +110,53 @@ app.post('/api/files/clear', (req, res) => {
 })
 
 
-// Upload file to session
+// Upload file to user directory
 app.post('/api/files/upload', tempUpload.single('file'), (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' })
     }
 
-    const { userId, sessionId, ext } = req.body
+    const { userId, ext } = req.body
 
-    if (!sessionId || !userId) {
+    if (!userId) {
       // Clean up uploaded file
       fs.unlinkSync(req.file.path)
-      return res.status(400).json({ error: 'Session ID and User ID are required' })
+      return res.status(400).json({ error: 'User ID is required' })
     }
 
-    const session = sessions.get(sessionId)
-    if (!session || session.userId !== userId) {
-      // Clean up uploaded file
-      fs.unlinkSync(req.file.path)
-      return res.status(404).json({ error: 'Session not found' })
+    // Create user directory
+    const userDir = path.join(UPLOADS_DIR, userId)
+    if (!fs.existsSync(userDir)) {
+      fs.mkdirSync(userDir, { recursive: true })
     }
 
-    // Create session directory
-    const sessionDir = path.join(TMP_DIR, userId, sessionId)
-    if (!fs.existsSync(sessionDir)) {
-      fs.mkdirSync(sessionDir, { recursive: true })
-    }
-
-    // Move file from temp to session directory with proper name
+    // Move file from temp to user directory with proper name
     const timestamp = Date.now()
     // Use provided ext or fallback to file extension
     const fileExt = ext || path.extname(req.file.originalname) || '.png'
     const basename = path.basename(req.file.originalname, path.extname(req.file.originalname))
     const newFilename = `${basename}_${timestamp}${fileExt}`
-    const finalPath = path.join(sessionDir, newFilename)
+    const finalPath = path.join(userDir, newFilename)
 
     fs.renameSync(req.file.path, finalPath)
 
-    updateSessionActivity(sessionId)
+    // Store file information in database
+    const fileUrl = `/uploads/${userId}/${newFilename}`
+    try {
+      imageDb.add(userId, newFilename, fileUrl)
+      console.log(`Saved to database: ${fileUrl}`)
+    } catch (dbError) {
+      console.error('Error saving to database:', dbError)
+      // Continue even if database save fails - file is already saved to disk
+    }
 
     res.json({
       message: 'File uploaded successfully',
       file: {
         name: newFilename,
-        size: req.file.size
+        size: req.file.size,
+        url: fileUrl
       }
     })
   } catch (error) {
@@ -367,25 +169,31 @@ app.post('/api/files/upload', tempUpload.single('file'), (req, res) => {
   }
 })
 
-// Delete file from session
-app.delete('/api/files/:userId/:sessionId/:filename', (req, res) => {
+// Delete file from user directory
+app.delete('/api/files/:userId/:filename', (req, res) => {
   try {
-    const { userId, sessionId, filename } = req.params
+    const { userId, filename } = req.params
 
-    const session = sessions.get(sessionId)
-    if (!session || session.userId !== userId) {
-      return res.status(404).json({ error: 'Session not found' })
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' })
     }
 
-    updateSessionActivity(sessionId)
-
-    const filePath = path.join(TMP_DIR, userId, sessionId, filename)
-
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'File not found' })
+    // Delete from database first
+    try {
+      imageDb.delete(userId, filename)
+      console.log(`Deleted from database: ${filename}`)
+    } catch (dbError) {
+      console.error('Error deleting from database:', dbError)
+      return res.status(500).json({ error: 'Failed to delete from database' })
     }
 
-    fs.unlinkSync(filePath)
+    // Then delete from filesystem
+    const filePath = path.join(UPLOADS_DIR, userId, filename)
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath)
+      console.log(`Deleted from filesystem: ${filename}`)
+    }
+
     res.json({ message: 'File deleted successfully', filename })
   } catch (error) {
     console.error('Error deleting file:', error)
@@ -399,8 +207,7 @@ app.get('/api/health', (_req, res) => {
     res.status(200).json({
       status: 'healthy',
       timestamp: new Date().toISOString(),
-      uptime: process.uptime(),
-      sessions: sessions.size
+      uptime: process.uptime()
     })
   } catch (error) {
     console.error('Health check error:', error)
@@ -411,12 +218,10 @@ app.get('/api/health', (_req, res) => {
   }
 })
 
-// Serve files from tmp directory
-app.use('/tmp', express.static(TMP_DIR))
+// Serve files from uploads directory
+app.use('/uploads', express.static(UPLOADS_DIR))
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`)
-  console.log(`Session files will be saved to: tmp/<userId>/<sessionId>/`)
-  console.log(`Session timeout: ${SESSION_TIMEOUT / 1000 / 60} minutes`)
-  console.log(`Cleanup check interval: ${CLEANUP_CHECK_INTERVAL / 1000} seconds`)
+  console.log(`Files will be saved to: uploads/<userId>/`)
 })

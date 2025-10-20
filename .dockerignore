@@ -10,9 +10,7 @@ npm-debug.log
 coverage
 .cache
 
-tmp/
 uploads/
-sessions.json
 
 docs.md
 DESIGN2_IMPLEMENTATION.md
@@ -21,6 +19,5 @@ IMPLEMENTATION_PLAN.md
 SELLER_SPECIFIC_STORAGE.md
 SETUP_AND_USAGE.md
 README_LOCAL_STORAGE.md
-SESSION_MANAGEMENT.md
 DOCKER_DEPLOYMENT.md
 EDIT_MODAL_NEW.txt

@@ -1501,11 +1501,10 @@ const BLEND_MODES: GlobalCompositeOperation[] = [
 type BlendMode = GlobalCompositeOperation
 
 interface MockupCanvasProps {
-  sessionId: string
   userId: string
 }
 
-function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
+function MockupCanvas({ userId }: MockupCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const toast = useToast()
   const [mockupImages, setMockupImages] = useState<HTMLImageElement[]>([])
@@ -1610,7 +1609,7 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
   const handleShowMockup = async () => {
     try {
       // Fetch files from server
-      const response = await fetch(`${API_BASE}/files/${userId}/${sessionId}`)
+      const response = await fetch(`${API_BASE}/files/${userId}`)
 
       if (!response.ok) {
         console.error('Failed to fetch files:', response.status)
@@ -1633,7 +1632,7 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
       for (const serverFile of serverFiles) {
         try {
           // Construct the URL for the file
-          const fileUrl = `${import.meta.env.VITE_API_BASE_URL || 'https://mockupai.supover.com'}/tmp/${userId}/${sessionId}/${serverFile.name}`
+          const fileUrl = `${import.meta.env.VITE_API_BASE_URL || 'https://mockupai.supover.com'}/uploads/${userId}/${serverFile.name}`
 
           // Fetch the file as a blob
           const fileResponse = await fetch(fileUrl)
@@ -1686,7 +1685,7 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
   const handleManager = async () => {
     try {
       // Fetch files from server
-      const response = await fetch(`${API_BASE}/files/${userId}/${sessionId}`)
+      const response = await fetch(`${API_BASE}/files/${userId}`)
 
       if (!response.ok) {
         console.error('Failed to fetch files:', response.status)
@@ -1709,7 +1708,7 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
       for (const serverFile of serverFiles) {
         try {
           // Construct the URL for the file
-          const fileUrl = `${import.meta.env.VITE_API_BASE_URL || 'https://mockupai.supover.com'}/tmp/${userId}/${sessionId}/${serverFile.name}`
+          const fileUrl = `${import.meta.env.VITE_API_BASE_URL || 'https://mockupai.supover.com'}/uploads/${userId}/${serverFile.name}`
 
           // Fetch the file as a blob
           const fileResponse = await fetch(fileUrl)
@@ -1968,7 +1967,7 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
     // If file is from database, delete  immediately
     if (file && file.isFromDatabase) {
       try {
-        const response = await fetch(`${API_BASE}/files/${userId}/${sessionId}/${encodeURIComponent(file.name)}`, {
+        const response = await fetch(`${API_BASE}/files/${userId}/${encodeURIComponent(file.name)}`, {
           method: 'DELETE'
         })
 
@@ -2327,7 +2326,7 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
       if (deletedFileNames.length > 0) {
         for (const filename of deletedFileNames) {
           try {
-            const response = await fetch(`${API_BASE}/files/${userId}/${sessionId}/${encodeURIComponent(filename)}`, {
+            const response = await fetch(`${API_BASE}/files/${userId}/${encodeURIComponent(filename)}`, {
               method: 'DELETE'
             })
 
@@ -2386,7 +2385,6 @@ function MockupCanvas({ sessionId, userId }: MockupCanvasProps) {
             try {
               const formData = new FormData()
               formData.append('file', file.file)
-              formData.append('sessionId', sessionId)
               formData.append('userId', userId)
               formData.append('ext', file.ext)
 

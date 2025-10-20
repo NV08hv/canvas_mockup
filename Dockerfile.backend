@@ -1,8 +1,8 @@
-# Backend Dockerfile for session-based file server
-FROM node:18-alpine
+# Backend Dockerfile for database-backed file server
+FROM node:20-alpine
 
-# Install wget for healthcheck
-RUN apk add --no-cache wget
+# Install build dependencies, wget for healthcheck, and sqlite for database management
+RUN apk add --no-cache python3 make g++ wget sqlite
 
 # Set working directory
 WORKDIR /app
@@ -13,11 +13,12 @@ COPY package*.json ./
 # Install dependencies
 RUN npm install --production
 
-# Copy server file
+# Copy server and database files
 COPY server.js ./
+COPY database.js ./
 
-# Create tmp directory for session files
-RUN mkdir -p tmp/uploads
+# Create directories for files and database
+RUN mkdir -p uploads/temp data
 
 # Expose port
 EXPOSE 3001

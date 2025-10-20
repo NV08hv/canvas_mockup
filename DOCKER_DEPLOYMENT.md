@@ -1,15 +1,15 @@
 # Docker Deployment Guide
 
-This guide explains how to deploy the session-based file editor using Docker.
+This guide explains how to deploy the database-backed file editor using Docker.
 
 ## Architecture
 
 The application consists of two services:
 
 1. **Backend** (Express API server on port 3001)
-   - Handles session management
-   - Stores files in `tmp/<sellerId>/<sessionId>/`
-   - Automatic session cleanup after 5 minutes of inactivity
+   - Handles file management with SQLite database
+   - Stores files in `uploads/<userId>/`
+   - Uses SQLite database for image metadata tracking
 
 2. **Frontend** (React + Vite on port 5173)
    - User interface for file editing
@@ -27,13 +27,13 @@ This will:
 - Build both frontend and backend images
 - Start both containers
 - Create a shared network for communication
-- Mount `./tmp` directory for persistent session storage
+- Mount `./uploads` directory for persistent file storage
 
 ### Access the Application
 
 - **Frontend**: http://localhost:5173
 - **Backend API**: http://localhost:3001
-- **With Seller ID**: http://localhost:5173/?sellerId=your_seller_id
+- **With User ID**: http://localhost:5173/?user_id=your_user_id
 
 ### Stop Services
 
@@ -60,7 +60,7 @@ docker build -f Dockerfile -t mockup-frontend .
 ```bash
 docker run -d \
   -p 3001:3001 \
-  -v $(pwd)/tmp:/app/tmp \
+  -v $(pwd)/uploads:/app/uploads \
   --name mockup-backend \
   mockup-backend
 ```
@@ -87,24 +87,24 @@ docker run -d \
 
 ## Volume Mounts
 
-### Session Data
+### File Data
 
-The backend mounts `./tmp` directory to persist session files:
+The backend mounts `./uploads` directory to persist files and the SQLite database:
 
 ```yaml
 volumes:
-  - ./tmp:/app/tmp
+  - ./uploads:/app/uploads
 ```
 
 This ensures:
-- Sessions survive container restarts
+- Files and database survive container restarts
 - Files are accessible from host machine
 - Easy backup and monitoring
 
 ## Healthcheck
 
 The backend includes a healthcheck that:
-- Tests endpoint: `http://localhost:3001/api/session/create`
+- Tests endpoint: `http://localhost:3001/api/health`
 - Interval: Every 30 seconds
 - Timeout: 10 seconds
 - Retries: 3 attempts
@@ -165,7 +165,7 @@ Run multiple frontend instances:
 docker-compose up --scale frontend=3
 ```
 
-**Note**: Backend should NOT be scaled as it uses in-memory session storage. For multi-instance backend, implement Redis for session storage.
+**Note**: Backend uses SQLite which does not scale horizontally. For multi-instance backend, migrate to PostgreSQL or MySQL.
 
 ## Troubleshooting
 
@@ -179,7 +179,7 @@ docker logs mockup_backend
 Common issues:
 - Port 3001 already in use
 - Missing dependencies in package.json
-- Permissions on tmp directory
+- Permissions on uploads directory
 
 ### Frontend Can't Connect to Backend
 
@@ -190,10 +190,7 @@ docker ps | grep mockup_backend
 
 2. Test backend API:
 ```bash
-curl http://localhost:3001/api/session/create \
-  -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"sellerId":"test"}'
+curl http://localhost:3001/api/health
 ```
 
 3. Check network connectivity:
@@ -201,26 +198,18 @@ curl http://localhost:3001/api/session/create \
 docker exec mockup_frontend ping backend
 ```
 
-### Sessions Not Persisting
+### Files Not Persisting
 
 Check volume mount:
 ```bash
 docker inspect mockup_backend | grep -A 5 Mounts
 ```
 
-Verify tmp directory:
+Verify uploads directory and database:
 ```bash
-ls -la tmp/
+ls -la uploads/
+ls -la uploads/database.sqlite
 ```
-
-### Files Not Being Cleaned Up
-
-Check cleanup logs:
-```bash
-docker logs mockup_backend | grep "Cleaned up session"
-```
-
-Sessions are cleaned up 5 minutes after last activity.
 
 ## Monitoring
 
@@ -231,9 +220,9 @@ docker logs -f mockup_backend
 ```
 
 Look for:
-- `Created new session: <sessionId> for seller: <sellerId>`
-- `Session restored`
-- `Cleaned up session: <sessionId>`
+- `Server running on http://localhost:3001`
+- `Database initialized successfully`
+- File upload/deletion messages
 
 ### View Frontend Logs
 
@@ -247,44 +236,50 @@ docker logs -f mockup_frontend
 docker stats
 ```
 
-### Inspect Session Files
+### Inspect Files
 
 ```bash
-# List all sessions
-ls -la tmp/
+# List all user directories
+ls -la uploads/
 
-# List files for a specific session
-ls -la tmp/<sellerId>/<sessionId>/
+# List files for a specific user
+ls -la uploads/<userId>/
+
+# View database
+sqlite3 uploads/database.sqlite "SELECT * FROM images;"
 ```
 
 ## Backup and Restore
 
-### Backup Session Data
+### Backup Data
 
 ```bash
-# Backup all sessions
-tar -czf sessions-backup-$(date +%Y%m%d).tar.gz tmp/
+# Backup all files and database
+tar -czf backup-$(date +%Y%m%d).tar.gz uploads/
 
-# Backup specific seller
-tar -czf seller-backup-$(date +%Y%m%d).tar.gz tmp/<sellerId>/
+# Backup specific user
+tar -czf user-backup-$(date +%Y%m%d).tar.gz uploads/<userId>/
+
+# Backup database only
+cp uploads/database.sqlite uploads/database-backup-$(date +%Y%m%d).sqlite
 ```
 
-### Restore Session Data
+### Restore Data
 
 ```bash
 # Extract backup
-tar -xzf sessions-backup-20251014.tar.gz
+tar -xzf backup-20251014.tar.gz
 
-# Restart backend to load sessions
+# Restart backend
 docker-compose restart backend
 ```
 
 ## Security Considerations
 
 1. **File Upload Limits**: Set to 10MB per file
-2. **Session Timeout**: 5 minutes of inactivity
+2. **Database Security**: SQLite file should have proper permissions
 3. **CORS**: Configured to allow all origins (update for production)
-4. **Volume Permissions**: Ensure proper permissions on tmp directory
+4. **Volume Permissions**: Ensure proper permissions on uploads directory
 
 ### Production Security Checklist
 
@@ -309,23 +304,23 @@ git pull
 docker-compose up --build -d
 ```
 
-### Clear All Session Data
+### Clear All Data
 
 ```bash
 # Stop containers
 docker-compose down
 
-# Remove session files
-rm -rf tmp/*
+# Remove all files and database
+rm -rf uploads/*
 
 # Start containers
 docker-compose up -d
 ```
 
-### View All Active Sessions
+### View Database Contents
 
 ```bash
-cat tmp/sessions.json | jq
+sqlite3 uploads/database.sqlite "SELECT * FROM images;"
 ```
 
 ## Support
@@ -333,5 +328,4 @@ cat tmp/sessions.json | jq
 For issues or questions, check:
 - Server logs: `docker logs mockup_backend`
 - Frontend logs: `docker logs mockup_frontend`
-- SESSION_MANAGEMENT.md for API documentation
 - README.md for general usage

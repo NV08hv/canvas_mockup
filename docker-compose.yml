@@ -11,7 +11,8 @@ services:
     ports:
       - "${PORT:-3001}:${PORT:-3001}"
     volumes:
-      - ./tmp:/app/tmp
+      - ./uploads:/app/uploads
+      - sqlite_data:/app/data
     env_file:
       - .env
     environment:
@@ -19,6 +20,7 @@ services:
       - PORT=${PORT:-3001}
       - SESSION_TIMEOUT=${SESSION_TIMEOUT:-900000}
       - CLEANUP_CHECK_INTERVAL=${CLEANUP_CHECK_INTERVAL:-600000}
+      - DB_PATH=/app/data/database.sqlite
     networks:
       - mockup_network
     healthcheck:
@@ -60,4 +62,6 @@ networks:
 
 volumes:
   session_data:
+    driver: local
+  sqlite_data:
     driver: local
