@@ -1575,6 +1575,16 @@ function MockupCanvas({ userId }: MockupCanvasProps) {
 
   // Handle mockup images loaded from ImageUploader
   const handleMockupImagesLoaded = (images: HTMLImageElement[], files: ImageFile[]) => {
+    // Filter out files that are already in mockupFiles to prevent duplicates
+    const existingFileNames = new Set(mockupFiles.map(f => f.name))
+    const trulyNewFiles = files.filter(file => !existingFileNames.has(file.name))
+    const trulyNewImages = images.filter((_, index) => !existingFileNames.has(files[index]?.name))
+    
+    if (trulyNewFiles.length === 0) {
+      console.log('No new files to add - all files already exist')
+      return
+    }
+
     // Calculate next index based on existing files
     const maxIndex = mockupFiles.length > 0
       ? Math.max(...mockupFiles.map(f => f.index ?? -1))
@@ -1584,7 +1594,7 @@ function MockupCanvas({ userId }: MockupCanvasProps) {
     const newFiles: ImageFile[] = []
     let nextIndex = maxIndex + 1
 
-    files.forEach((file) => {
+    trulyNewFiles.forEach((file) => {
       newFiles.push({
         ...file,
         index: nextIndex,
@@ -1595,12 +1605,12 @@ function MockupCanvas({ userId }: MockupCanvasProps) {
 
     // Merge new files with existing
     setMockupFiles([...mockupFiles, ...newFiles])
-    setMockupImages([...mockupImages, ...images])
+    setMockupImages([...mockupImages, ...trulyNewImages])
 
     // If this is the first upload, select the first image
-    if (mockupImages.length === 0 && images.length > 0) {
+    if (mockupImages.length === 0 && trulyNewImages.length > 0) {
       setSelectedMockupIndex(0)
-      setMockupImage(images[0])
+      setMockupImage(trulyNewImages[0])
     }
   }
 
@@ -1611,10 +1621,6 @@ function MockupCanvas({ userId }: MockupCanvasProps) {
     }
   }, [selectedMockupIndex, mockupImages])
 
-  // Debug: Log mockupFiles changes để kiểm tra
-  useEffect(() => {
-    console.log(`mockupFiles updated - total: ${mockupFiles.length}, new: ${mockupFiles.filter(f => !f.isFromDatabase).length}`)
-  }, [mockupFiles])
 
   // Handle Show Mockup button click
   const handleShowMockup = async () => {
