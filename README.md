@@ -8,7 +8,9 @@ A web application for overlaying design images onto T-shirt mockups directly in 
 - 🎨 Drag, scale, rotate, and adjust opacity
 - 🌈 10+ blend modes for natural fabric blending
 - 💾 Export high-quality PNG files
-- 🔒 Frontend-only processing (no backend required)
+- 🗄️ SQLite database integration for persistent storage
+- 📋 Manager modal for organizing and deleting saved files
+- 🔍 Show Mockup modal for loading files into workspace
 
 ## Tech Stack
 
@@ -36,16 +38,25 @@ npm run build
 
 ## Usage
 
-1. Upload a mockup image (plain T-shirt base)
-2. Upload a design image (preferably transparent PNG)
+1. Upload mockup images (plain T-shirt bases)
+2. Upload design images (preferably transparent PNG)
 3. Use the controls to:
    - Drag the design on the canvas
    - Scale with the slider
    - Rotate to any angle
    - Adjust opacity
    - Choose a blend mode (multiply works great for most cases)
-4. Export the final mockup as PNG
+4. Save your work to the database
+5. Use the **Manager** button to:
+   - View all saved files in the database
+   - Permanently delete files from storage
+6. Use the **Show Mockup** button to:
+   - Load saved files into your workspace
+   - Select which files to work with
+7. Export final mockups as PNG or ZIP
 
-## No Backend Required
+## Database Storage
 
-All image processing happens in your browser using the Canvas API. No images are uploaded to any server.
+- Files are stored persistently in an SQLite database
+- Manager modal provides permanent deletion capabilities
+- Show Mockup modal loads files into the editing interface without deleting them

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import JSZip from 'jszip'
 import ImageUploader, { ImageFile } from './ImageUploader'
 import MockupModal from './MockupModal'
+import ManagerModal from './ManagerModal'
 import { useToast, ToastType } from './Toast'
 
 interface Transform {
@@ -1516,6 +1517,8 @@ function MockupCanvas({ userId }: MockupCanvasProps) {
   const [mockupImage, setMockupImage] = useState<HTMLImageElement | null>(null)
   const [isSaving, setIsSaving] = useState(false) // Loading state for save operation
   const [showMockupModal, setShowMockupModal] = useState(false) // Modal state for showing mockups
+  const [showManagerModal, setShowManagerModal] = useState(false) // Modal state for managing database files
+  const [managerFiles, setManagerFiles] = useState<ImageFile[]>([]) // Files for Manager modal
 
   // Design state
   const [design1, setDesign1] = useState<DesignState>({
@@ -1559,6 +1562,9 @@ function MockupCanvas({ userId }: MockupCanvasProps) {
 
   // Canvas refresh counter to force re-render of preview tiles
   const [canvasRefreshKey, setCanvasRefreshKey] = useState(0)
+  
+  // Reset trigger for ImageUploader
+  const [imageUploaderResetTrigger, setImageUploaderResetTrigger] = useState(0)
 
   // Drag state
   const [isDragging, setIsDragging] = useState(false)
@@ -1604,6 +1610,11 @@ function MockupCanvas({ userId }: MockupCanvasProps) {
       setMockupImage(mockupImages[selectedMockupIndex])
     }
   }, [selectedMockupIndex, mockupImages])
+
+  // Debug: Log mockupFiles changes để kiểm tra
+  useEffect(() => {
+    console.log(`mockupFiles updated - total: ${mockupFiles.length}, new: ${mockupFiles.filter(f => !f.isFromDatabase).length}`)
+  }, [mockupFiles])
 
   // Handle Show Mockup button click
   const handleShowMockup = async () => {
@@ -1681,7 +1692,7 @@ function MockupCanvas({ userId }: MockupCanvasProps) {
     }
   }
 
-  // Handle Manager button - Load server files directly into editing interface
+  // Handle Manager button - Show modal for managing database files (permanent deletion)
   const handleManager = async () => {
     try {
       // Fetch files from server
@@ -1695,15 +1706,15 @@ function MockupCanvas({ userId }: MockupCanvasProps) {
 
       const serverFiles = await response.json()
 
-      // If no files on server, show message
+      // If no files on server, show modal with empty array
       if (!serverFiles || serverFiles.length === 0) {
-        toast.error('No files on server')
+        setManagerFiles([])
+        setShowManagerModal(true)
         return
       }
 
       // Load images from server and create ImageFile objects
       const loadedFiles: ImageFile[] = []
-      const loadedImages: HTMLImageElement[] = []
 
       for (const serverFile of serverFiles) {
         try {
@@ -1741,39 +1752,29 @@ function MockupCanvas({ userId }: MockupCanvasProps) {
           }
 
           loadedFiles.push(imageFile)
-
-          // Load image
-          const img = new Image()
-          await new Promise<void>((resolve, reject) => {
-            img.onload = () => resolve()
-            img.onerror = () => reject(new Error('Failed to load image'))
-            img.src = objectUrl
-          })
-          loadedImages.push(img)
         } catch (error) {
           console.error(`Error loading file ${serverFile.name}:`, error)
         }
       }
 
-      // Update editing interface with server files
-      setMockupFiles(loadedFiles)
-      setMockupImages(loadedImages)
-      setHiddenMockupIndices(new Set())
-
-      // Set first image as selected
-      if (loadedImages.length > 0) {
-        setSelectedMockupIndex(0)
-        setMockupImage(loadedImages[0])
-      } else {
-        setSelectedMockupIndex(0)
-        setMockupImage(null)
-      }
-
-      toast.success(`Loaded ${loadedFiles.length} file${loadedFiles.length !== 1 ? 's' : ''}`)
+      // Store files for manager modal
+      setManagerFiles(loadedFiles)
+      setShowManagerModal(true)
     } catch (error) {
       console.error('Error loading files:', error)
       toast.error('Failed to load files')
     }
+  }
+
+  // Handle manager modal close
+  const handleManagerClose = () => {
+    setShowManagerModal(false)
+  }
+
+  // Handle manager modal file deletion
+  const handleManagerDeleted = () => {
+    toast.success('Files deleted from database')
+    setShowManagerModal(false)
   }
 
   // Handle modal close
@@ -1781,21 +1782,18 @@ function MockupCanvas({ userId }: MockupCanvasProps) {
     setShowMockupModal(false)
   }
 
-  // Handle modal Save Changes button (preview-only: track deletions but don't apply until main Save)
+  // Handle modal Apply button (Load Mockups - does NOT delete from database)
   const handleModalNext = async (remainingFiles: ImageFile[]) => {
-    // Identify which files were deleted (files in modalFiles but not in remainingFiles)
-    const remainingIds = new Set(remainingFiles.map(f => f.id))
-    const deletedFiles = modalFiles.filter(f => !remainingIds.has(f.id) && f.isFromDatabase)
+    // User selected which files to load into interface (files removed in modal are NOT deleted from database)
 
-    // Track deleted file names for later deletion on main Save
-    if (deletedFiles.length > 0) {
-      setDeletedFileNames(prev => [...prev, ...deletedFiles.map(f => f.name)])
-    }
+    // Separate remaining files into saved files and newly uploaded files
+      const remainingDbFiles = remainingFiles.filter(f => !!f.isFromDatabase)
+      const remainingStagedFiles = remainingFiles.filter(f => !f.isFromDatabase)
 
-    // Load remaining server files into the interface for editing
+    // Load remaining database files into the interface
     const loadedImages: HTMLImageElement[] = []
 
-    for (const file of remainingFiles) {
+    for (const file of remainingDbFiles) {
       try {
         const img = new Image()
         await new Promise<void>((resolve, reject) => {
@@ -1809,22 +1807,28 @@ function MockupCanvas({ userId }: MockupCanvasProps) {
       }
     }
 
-    // Update interface with remaining server files + any staged uploads
-    const stagedUploads = mockupFiles.filter(f => !f.isFromDatabase)
-    setMockupFiles([...remainingFiles, ...stagedUploads])
-    setMockupImages([...loadedImages, ...mockupImages.filter((_, i) => !mockupFiles[i]?.isFromDatabase)])
+    // Get images for remaining staged files (newly uploaded files that weren't deleted)
+    const remainingStagedIds = new Set(remainingStagedFiles.map(f => f.id))
+    const stagedImages: HTMLImageElement[] = []
+
+    mockupFiles.forEach((file, i) => {
+      if (!file.isFromDatabase && remainingStagedIds.has(file.id)) {
+        stagedImages.push(mockupImages[i])
+      }
+    })
+
+    // Update interface with remaining database files + remaining staged files
+    setMockupFiles([...remainingDbFiles, ...remainingStagedFiles])
+    setMockupImages([...loadedImages, ...stagedImages])
 
     // Clear hidden indices since we're rebuilding the arrays
     setHiddenMockupIndices(new Set())
 
-    // Update selected index if needed
-    if (loadedImages.length > 0) {
+    // Update selected index to first remaining file if any
+    const totalRemainingImages = loadedImages.length + stagedImages.length
+    if (totalRemainingImages > 0) {
       setSelectedMockupIndex(0)
-      setMockupImage(loadedImages[0])
-    } else if (mockupImages.length > loadedImages.length) {
-      // If only staged uploads remain
-      setSelectedMockupIndex(0)
-      setMockupImage(mockupImages[loadedImages.length])
+      setMockupImage(loadedImages.length > 0 ? loadedImages[0] : stagedImages[0])
     } else {
       setSelectedMockupIndex(0)
       setMockupImage(null)
@@ -1960,66 +1964,203 @@ function MockupCanvas({ userId }: MockupCanvasProps) {
     ctx.restore()
   }
 
-  // Delete mockup image (hides from interface and deletes from server if from database)
+  // Cleanup function to revoke all object URLs for new files
+  const cleanupNewFiles = (files: ImageFile[]) => {
+    files.forEach(file => {
+      if (!file.isFromDatabase && file.url && file.url.startsWith('blob:')) {
+        URL.revokeObjectURL(file.url)
+      }
+    })
+  }
+
+  // Delete mockup image - chỉ xử lý khi user chủ động bấm xóa
   const deleteMockup = async (index: number) => {
     const file = mockupFiles[index]
 
-    // If file is from database, delete  immediately
-    if (file && file.isFromDatabase) {
-      try {
-        const response = await fetch(`${API_BASE}/files/${userId}/${encodeURIComponent(file.name)}`, {
-          method: 'DELETE'
-        })
-
-        if (response.ok) {
-          toast.success(`Deleted ${file.name}`)
-        } else {
-          console.error(`Failed to delete ${file.name}: ${response.status}`)
-          toast.error(`Failed to delete ${file.name}`)
-          return // Don't hide if delete failed
-        }
-      } catch (error) {
-        console.error(`Error deleting ${file.name}:`, error)
-        toast.error(`Error deleting ${file.name}`)
-        return // Don't hide if delete failed
+    if (file && !file.isFromDatabase) {
+      // File mới (chưa lưu) - XÓA HOÀN TOÀN khi user bấm xóa
+      console.log(`Deleting new file: ${file.name}`)
+      
+      // Revoke object URL để giải phóng memory
+      if (file.url && file.url.startsWith('blob:')) {
+        URL.revokeObjectURL(file.url)
       }
-    }
+      
+      // Xóa hoàn toàn khỏi arrays
+      const newMockupFiles = mockupFiles.filter((_, i) => i !== index)
+      const newMockupImages = mockupImages.filter((_, i) => i !== index)
 
-    // Hide the mockup from interface
-    setHiddenMockupIndices(prev => new Set(prev).add(index))
+      // Rebuild all Maps with shifted indices
+      const newOffsets = new Map<number, { x: number; y: number }>()
+      mockupOffsets.forEach((value, key) => {
+        if (key < index) newOffsets.set(key, value)
+        else if (key > index) newOffsets.set(key - 1, value)
+      })
 
-    // Exit edit mode if editing this mockup
-    if (editMode.active && editMode.mockupIndex === index) {
-      setEditMode({ active: false, mockupIndex: null })
-    }
+      const newTransforms1 = new Map<number, Transform>()
+      mockupCustomTransforms1.forEach((value, key) => {
+        if (key < index) newTransforms1.set(key, value)
+        else if (key > index) newTransforms1.set(key - 1, value)
+      })
 
-    // Update selected index to next visible mockup
-    const visibleIndices = mockupFiles
-      .map((_, i) => i)
-      .filter(i => i !== index && !hiddenMockupIndices.has(i))
+      const newBlendModes1 = new Map<number, GlobalCompositeOperation>()
+      mockupCustomBlendModes1.forEach((value, key) => {
+        if (key < index) newBlendModes1.set(key, value)
+        else if (key > index) newBlendModes1.set(key - 1, value)
+      })
 
-    if (visibleIndices.length > 0) {
-      // Find the next visible index after the deleted one
-      const nextVisible = visibleIndices.find(i => i > index)
-      setSelectedMockupIndex(nextVisible ?? visibleIndices[visibleIndices.length - 1])
-    } else {
-      setSelectedMockupIndex(0)
+      const newTransforms2 = new Map<number, Transform>()
+      mockupCustomTransforms2.forEach((value, key) => {
+        if (key < index) newTransforms2.set(key, value)
+        else if (key > index) newTransforms2.set(key - 1, value)
+      })
+
+      const newBlendModes2 = new Map<number, GlobalCompositeOperation>()
+      mockupCustomBlendModes2.forEach((value, key) => {
+        if (key < index) newBlendModes2.set(key, value)
+        else if (key > index) newBlendModes2.set(key - 1, value)
+      })
+
+      // Update hidden indices
+      const newHiddenIndices = new Set<number>()
+      hiddenMockupIndices.forEach(i => {
+        if (i < index) newHiddenIndices.add(i)
+        else if (i > index) newHiddenIndices.add(i - 1)
+      })
+
+      // Update all state
+      setMockupFiles(newMockupFiles)
+      setMockupImages(newMockupImages)
+      setMockupOffsets(newOffsets)
+      setMockupCustomTransforms1(newTransforms1)
+      setMockupCustomBlendModes1(newBlendModes1)
+      setMockupCustomTransforms2(newTransforms2)
+      _setMockupCustomBlendModes2(newBlendModes2)
+      setHiddenMockupIndices(newHiddenIndices)
+
+      // Exit edit mode if editing this mockup
+      if (editMode.active && editMode.mockupIndex === index) {
+        setEditMode({ active: false, mockupIndex: null })
+      } else if (editMode.active && editMode.mockupIndex !== null && editMode.mockupIndex > index) {
+        // Shift edit mode index down if it was after the deleted file
+        setEditMode({ active: true, mockupIndex: editMode.mockupIndex - 1 })
+      }
+
+      // Update selected index and mockup image
+      if (newMockupFiles.length > 0) {
+        if (index >= newMockupFiles.length) {
+          setSelectedMockupIndex(newMockupFiles.length - 1)
+          setMockupImage(newMockupImages[newMockupFiles.length - 1])
+        } else {
+          setSelectedMockupIndex(index)
+          setMockupImage(newMockupImages[index])
+        }
+      } else {
+        setSelectedMockupIndex(0)
+        setMockupImage(null)
+      }
+
+      toast.success('Deleted new file.')
+      
+      // Reset ImageUploader to prevent it from re-adding files
+      setImageUploaderResetTrigger(prev => prev + 1)
+    } else if (file && file.isFromDatabase) {
+      // File đã lưu (từ database) - chỉ ẩn khỏi interface khi user bấm xóa
+      console.log(`Hiding saved file: ${file.name}`)
+      setHiddenMockupIndices(prev => new Set(prev).add(index))
+
+      // Exit edit mode if editing this mockup
+      if (editMode.active && editMode.mockupIndex === index) {
+        setEditMode({ active: false, mockupIndex: null })
+      }
+
+      // Update selected index to next visible mockup
+      const visibleIndices = mockupFiles
+        .map((_, i) => i)
+        .filter(i => i !== index && !hiddenMockupIndices.has(i))
+
+      if (visibleIndices.length > 0) {
+        const nextVisible = visibleIndices.find(i => i > index)
+        setSelectedMockupIndex(nextVisible ?? visibleIndices[visibleIndices.length - 1])
+      } else {
+        setSelectedMockupIndex(0)
+      }
     }
 
     setCanvasRefreshKey(prev => prev + 1)
   }
 
-  // Delete all mockup images (only hides from interface, keeps in memory)
+  // Delete all mockup images - chỉ xử lý khi user chủ động bấm xóa tất cả
   const deleteAllMockups = async () => {
-    // Hide all mockups by adding all indices to hidden set
-    const allIndices = mockupFiles.map((_, index) => index)
-    setHiddenMockupIndices(new Set(allIndices))
+    // Separate saved files from new files
+    const savedFiles = mockupFiles.filter(f => !!f.isFromDatabase)
+    const newFiles = mockupFiles.filter(f => !f.isFromDatabase)
+
+    if (newFiles.length > 0) {
+      console.log(`Deleting ${newFiles.length} new files when user clicked delete all`)
+      
+      // Cleanup all new files - revoke object URLs to free memory
+      cleanupNewFiles(newFiles)
+      
+      // Completely remove new files from memory
+      const remainingFiles = mockupFiles.filter(f => !!f.isFromDatabase)
+      const remainingImages = mockupImages.filter((_, i) => mockupFiles[i]?.isFromDatabase)
+
+      // Clear Maps for new files, keep only database file entries
+      const newOffsets = new Map<number, { x: number; y: number }>()
+      const newTransforms1 = new Map<number, Transform>()
+      const newBlendModes1 = new Map<number, GlobalCompositeOperation>()
+      const newTransforms2 = new Map<number, Transform>()
+      const newBlendModes2 = new Map<number, GlobalCompositeOperation>()
+
+      // Rebuild Maps with only saved files at new indices
+      let newIndex = 0
+      mockupFiles.forEach((file, oldIndex) => {
+        if (file.isFromDatabase) {
+          if (mockupOffsets.has(oldIndex)) {
+            newOffsets.set(newIndex, mockupOffsets.get(oldIndex)!)
+          }
+          if (mockupCustomTransforms1.has(oldIndex)) {
+            newTransforms1.set(newIndex, mockupCustomTransforms1.get(oldIndex)!)
+          }
+          if (mockupCustomBlendModes1.has(oldIndex)) {
+            newBlendModes1.set(newIndex, mockupCustomBlendModes1.get(oldIndex)!)
+          }
+          if (mockupCustomTransforms2.has(oldIndex)) {
+            newTransforms2.set(newIndex, mockupCustomTransforms2.get(oldIndex)!)
+          }
+          if (mockupCustomBlendModes2.has(oldIndex)) {
+            newBlendModes2.set(newIndex, mockupCustomBlendModes2.get(oldIndex)!)
+          }
+          newIndex++
+        }
+      })
+
+      setMockupFiles(remainingFiles)
+      setMockupImages(remainingImages)
+      setMockupOffsets(newOffsets)
+      setMockupCustomTransforms1(newTransforms1)
+      setMockupCustomBlendModes1(newBlendModes1)
+      setMockupCustomTransforms2(newTransforms2)
+      _setMockupCustomBlendModes2(newBlendModes2)
+    }
+
+    // Hide all saved files from interface
+    if (savedFiles.length > 0) {
+      const allIndices = mockupFiles.map((_, index) => index).filter(i => mockupFiles[i]?.isFromDatabase)
+      setHiddenMockupIndices(new Set(allIndices))
+    }
 
     // Reset selection and edit mode
     setSelectedMockupIndex(0)
     setMockupImage(null)
     if (editMode.active) {
       setEditMode({ active: false, mockupIndex: null })
+    }
+
+    // Reset ImageUploader if we removed new files
+    if (newFiles.length > 0) {
+      setImageUploaderResetTrigger(prev => prev + 1)
     }
 
     setCanvasRefreshKey(prev => prev + 1)
@@ -2636,6 +2777,7 @@ function MockupCanvas({ userId }: MockupCanvasProps) {
               onImagesLoaded={handleMockupImagesLoaded}
               label="Mockup Images"
               accept="image/*"
+              resetTrigger={imageUploaderResetTrigger}
             />
 
             {/* Design 1 Upload */}
@@ -3271,6 +3413,17 @@ function MockupCanvas({ userId }: MockupCanvasProps) {
           mockupFiles={modalFiles}
           onClose={handleModalClose}
           onNext={handleModalNext}
+        />
+      )}
+
+      {/* Manager Modal */}
+      {showManagerModal && (
+        <ManagerModal
+          mockupFiles={managerFiles}
+          userId={userId}
+          apiBase={API_BASE}
+          onClose={handleManagerClose}
+          onDeleted={handleManagerDeleted}
         />
       )}
     </div>

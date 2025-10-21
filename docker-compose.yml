@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Backend (Express API server)
   backend:

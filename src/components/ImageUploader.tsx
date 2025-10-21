@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 
 export interface ImageFile {
   id: string
@@ -18,9 +18,10 @@ interface ImageUploaderProps {
   accept?: string
   label?: string
   initialFiles?: ImageFile[] // Support pre-loading files from database
+  resetTrigger?: number // Trigger to reset internal state
 }
 
-function ImageUploader({ onImagesLoaded, accept = 'image/*', label = 'Upload Images', initialFiles = [] }: ImageUploaderProps) {
+function ImageUploader({ onImagesLoaded, accept = 'image/*', label = 'Upload Images', initialFiles = [], resetTrigger }: ImageUploaderProps) {
   const [imageFiles, setImageFiles] = useState<ImageFile[]>(initialFiles)
   const [urlInput, setUrlInput] = useState('')
   const [isLoadingUrl, setIsLoadingUrl] = useState(false)
@@ -34,6 +35,15 @@ function ImageUploader({ onImagesLoaded, accept = 'image/*', label = 'Upload Ima
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
+
+  // Reset internal state when resetTrigger changes
+  useEffect(() => {
+    if (resetTrigger !== undefined) {
+      setImageFiles([])
+      setNextIndex(0)
+      console.log('ImageUploader reset triggered')
+    }
+  }, [resetTrigger])
 
   // Helper to generate unique ID
   const generateId = () => Math.random().toString(36).substring(2, 11)
