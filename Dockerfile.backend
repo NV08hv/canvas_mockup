@@ -1,17 +1,17 @@
-# Backend Dockerfile for database-backed file server
+# Optimized Backend Dockerfile for database-backed file server
 FROM node:20-alpine
 
-# Install build dependencies, wget for healthcheck, and sqlite for database management
-RUN apk add --no-cache python3 make g++ wget sqlite
+# Install only runtime dependencies (no build tools needed for backend)
+RUN apk add --no-cache wget sqlite
 
 # Set working directory
 WORKDIR /app
 
-# Copy package files
+# Copy package files first for better caching
 COPY package*.json ./
 
-# Install dependencies
-RUN npm install --production
+# Install dependencies with optimizations
+RUN npm ci --only=production --silent && npm cache clean --force
 
 # Copy server and database files
 COPY server.js ./
